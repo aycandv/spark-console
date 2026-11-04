@@ -133,6 +133,13 @@ class ServerTest(unittest.TestCase):
             r.close()
             c.close()
 
+    def test_forwarded_host_from_tailscale_serve_on_unix_socket(self):
+        # tailscaled sends Host: localhost and the real name in X-Forwarded-Host when proxying to a socket.
+        fwd = {"Host": "localhost", "X-Forwarded-Host": "dgx0.example.ts.net:9443"}
+        self.assertEqual(self.req("POST", "/api/revert", {}, {**fwd, "Origin": "https://dgx0.example.ts.net:9443"})[0], 200)
+        self.assertEqual(self.req("POST", "/api/revert", {}, {**fwd, "Origin": "https://evil.example"})[0], 403)
+        self.assertEqual(self.req("GET", "/api/state", headers={"Host": "localhost", "X-Forwarded-Host": "evil.example"})[0], 403)
+
     def test_unknown_host_is_refused(self):
         self.assertEqual(self.req("GET", "/api/state", headers={"Host": "rebind.evil.example"})[0], 403)
 

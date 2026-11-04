@@ -77,7 +77,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, {"error": msg})
 
     def _allowed(self, mutating):
-        host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+        # Behind tailscale serve on a Unix socket, Host is "localhost" and the name is in X-Forwarded-Host.
+        raw = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or ""
+        host = raw.rsplit(":", 1)[0].strip("[]").lower()
         if host not in self.app.hostnames:
             return self._error(403, f"unknown host {host!r}")
         login = self.headers.get("Tailscale-User-Login")
