@@ -5,7 +5,10 @@ set -eu
 
 [ "$(id -u)" -eq 0 ] || { echo "Run with sudo: sudo deploy/install.sh" >&2; exit 1; }
 target_user=${SUDO_USER:-}
-[ -n "$target_user" ] && [ "$target_user" != root ] || { echo "Run through sudo from your own account." >&2; exit 1; }
+if [ -z "$target_user" ] || [ "$target_user" = root ]; then
+    echo "Run through sudo from your own account." >&2
+    exit 1
+fi
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 helper=/usr/local/sbin/spark-console-helper
