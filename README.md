@@ -82,7 +82,42 @@ Requirements:
 
    If you do nothing, the previous values come back at the end of the trial. If a revert fails, the bar shows the error and tries again every 10 s. If the server stops during a trial, it reverts the trial when it starts again (systemd restarts it after 3 s). The **Activity** section records each step.
 
-To go back to the boot values, open **Services** and click **Re-apply Boot Values**. This restarts `nv-cpu-governor`, `gb10-clocklock` and `cpu-epp` in one transaction, as at boot.
+To go back to the boot values, open **Services** and click **Re-apply boot values**. This restarts `nv-cpu-governor`, `gb10-clocklock` and `cpu-epp` in one transaction, as at boot.
+
+### Read the energy class
+
+The energy class is the GPU energy per token (J/token) on a scale from A to G. It is a console scale, not an EU rating.
+
+1. Click the **Energy** tab at the right edge of the page, or press `E`. On a phone, tap the **Energy class** button at the bottom right.
+
+   The drawer opens. It shows the class, the J/token value and the decode rate in tok/s.
+
+2. During a trial, read the class line and the table under the ladder.
+
+   They show the values before the trial and now, the change, and a verdict: better, worse or within noise. If the class is better but decode is slower by more than the noise, the label shows a warning.
+
+   The verdict comes 20 s after **Apply**: 10 s for the clocks to settle, then 10 samples. Until then, the table shows "measuring". If decode is below the decode minimum (5 tok/s by default) in the trial, there is no class. The label then shows the decode change and a warning.
+
+3. To close the drawer, press `Esc` or click **×**. On a phone, you can also tap the page above the drawer.
+
+   The drawer is closed each time the page loads.
+
+To change the scale, click **Edit scale** in the drawer. The scale is kept in this browser only.
+
+### Themes and shortcuts
+
+To change the theme, click **Auto**, **Dark** or **Light** in the header. **Auto** follows the operating system.
+
+| Key | Action |
+|---|---|
+| `A` | Apply the staged changes |
+| `K` | Keep the trial |
+| `B` | Keep the trial after reboot |
+| `R` | Revert the trial now |
+| `E` | Open or close the energy drawer |
+| `Esc` | Close the energy drawer |
+
+The trial keys work 0.6 s after the trial starts. To turn off the single-key shortcuts, click **Keyboard shortcuts** at the bottom of the page.
 
 ## Check the boot values
 
@@ -121,7 +156,15 @@ Do this after a reboot, or after **Re-apply Boot Values**.
 
    The last line is `OK`.
 
-2. Start the server without hardware access:
+2. Run the client unit tests (needs Node 22):
+
+   ```sh
+   node --test tests/web/
+   ```
+
+   The output shows `fail 0`.
+
+3. Start the server without hardware access:
 
    ```sh
    python3 -m spark_console --simulate --bind 127.0.0.1 --port 5567 --owner dev@local
@@ -129,12 +172,12 @@ Do this after a reboot, or after **Re-apply Boot Values**.
 
    With `--simulate`, the controls change an in-memory copy. The readings are still real. Each request must send the header `Tailscale-User-Login: dev@local`.
 
-3. Run the browser smoke check against that server (needs Node 22 and `google-chrome`):
+4. Run the browser smoke check against that server (needs Node 22 and `google-chrome`):
 
    ```sh
-   node scripts/ui_smoke.mjs http://127.0.0.1:5567/ /tmp dev@local
+   node scripts/ui_smoke.mjs http://127.0.0.1:5567/ .shots dev@local
    ```
 
-   The last line is `ui smoke: pass`. Screenshots go to `/tmp`.
+   The last line is `ui smoke: pass`. The screenshots go to `.shots/`, in the dark and the light theme. An optional fifth argument sets the Chrome debug port (default 9333).
 
 Vendored files and their licenses are listed in `web/vendor/README`.
