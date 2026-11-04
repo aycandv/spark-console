@@ -84,6 +84,18 @@ Requirements:
 
 To go back to the boot values, open **Services** and click **Re-apply Boot Values**. This restarts `gb10-clocklock` and `cpu-epp`.
 
+## Check the boot values
+
+Do this after a reboot, or after **Re-apply Boot Values**.
+
+1. Run the boot check:
+
+   ```sh
+   python3 scripts/boot_check.py
+   ```
+
+   The last line is `boot check: pass`. Each `FAIL` line names the unit, value or file that is wrong.
+
 ## Uninstall
 
 1. Remove the helper, the sudoers rule and the boot drop-ins:

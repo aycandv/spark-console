@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -38,6 +39,9 @@ class Ctx:
     run_dirs: tuple = ("/run/spark-console", "/run/sparkdash")
     boot_id_path: str = "/proc/sys/kernel/random/boot_id"
     run: Callable = field(default=lambda argv: subprocess.run(argv, check=True, timeout=20))
+    show: Callable = field(default=lambda unit: subprocess.run(
+        [SYSTEMCTL, "show", "-p", "ActiveState", "--value", unit], capture_output=True, text=True, timeout=10).stdout.strip())
+    sleep: Callable = time.sleep
 
 
 def _int(text: str, lo: int, hi: int) -> int:
@@ -177,10 +181,20 @@ def persist_cpu(ctx, epp, x925_khz, a725_khz, governor):
             "# Written by spark-console. Remove this file to restore the unit's own value.\n"
             "[Unit]\nAfter=nv-cpu-governor.service\n"
             "[Service]\nExecStart=\n"
+            f"ExecStartPre={SELF} wait-governor-unit\n"
             f"ExecStart={SELF} cpu-governor {governor}\n"
             f"ExecStart={SELF} cpu-epp {epp}\n"
             f"ExecStart={SELF} cpu-max x925 {khz['x925']}\n"
             f"ExecStart={SELF} cpu-max a725 {khz['a725']}\n")
+
+
+def wait_governor_unit(ctx, timeout_s=30, step_s=0.5):
+    """nv-cpu-governor is Type=idle, so After= does not wait for its cpupower to finish.
+    Wait until it has exited, so it cannot overwrite the governor set after it. Never fails boot."""
+    waited = 0.0
+    while ctx.show("nv-cpu-governor.service") in ("activating", "active", "reloading") and waited < timeout_s:
+        ctx.sleep(step_s)
+        waited += step_s
 
 
 def reapply_boot(ctx):
@@ -198,6 +212,7 @@ ACTIONS = {
     "persist-gpu": (persist_gpu, 1),
     "persist-cpu": (persist_cpu, 4),
     "reapply-boot": (reapply_boot, 0),
+    "wait-governor-unit": (wait_governor_unit, 0),
 }
 
 

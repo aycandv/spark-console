@@ -168,19 +168,38 @@ class ControllerTest(unittest.TestCase):
 
     def test_trial_journal_lets_a_restarted_server_revert(self):
         with tempfile.TemporaryDirectory() as d:
-            journal = f"{d}/trial.json"
+            journal, boot = f"{d}/trial.json", f"{d}/boot_id"
+            Path(boot).write_text("boot-1\n")
             c1 = control.Controller(run=self.m.run, read_current=self.m.current, read_limits=lambda: LIMITS,
-                                    read_persisted=lambda: {}, clock=self.clock, journal=journal)
+                                    read_persisted=lambda: {}, clock=self.clock, journal=journal, boot_id_path=boot)
             c1.apply({"epp": 5, "gpu_cap_mhz": 1500})
             self.assertTrue(Path(journal).exists())
             # The process dies here without reverting. A new one starts:
             c2 = control.Controller(run=self.m.run, read_current=self.m.current, read_limits=lambda: LIMITS,
-                                    read_persisted=lambda: {}, clock=self.clock, journal=journal)
+                                    read_persisted=lambda: {}, clock=self.clock, journal=journal, boot_id_path=boot)
             c2.recover()
             self.assertEqual(self.m.state["epp"], 128)
             self.assertEqual(self.m.state["gpu_cap_mhz"], 2100)
             self.assertFalse(Path(journal).exists())
             self.assertEqual(c2.status()["events"][-1]["why"], "recovered after restart")
+
+    def test_journal_from_an_earlier_boot_is_discarded(self):
+        # After a reboot the boot units have already set the boot values; reverting would override them.
+        with tempfile.TemporaryDirectory() as d:
+            journal, boot = f"{d}/trial.json", f"{d}/boot_id"
+            Path(boot).write_text("boot-1\n")
+            mk = lambda: control.Controller(run=self.m.run, read_current=self.m.current, read_limits=lambda: LIMITS,
+                                            read_persisted=lambda: {}, clock=self.clock, journal=journal, boot_id_path=boot)
+            mk().apply({"epp": 5})
+            Path(boot).write_text("boot-2\n")
+            self.m.state["epp"] = 128  # what the boot unit set
+            calls = len(self.m.calls)
+            c = mk()
+            c.recover()
+            self.assertEqual(len(self.m.calls), calls)  # nothing applied
+            self.assertEqual(self.m.state["epp"], 128)
+            self.assertFalse(Path(journal).exists())
+            self.assertEqual(c.status()["events"][-1]["kind"], "trial_dropped_by_reboot")
 
     def test_journal_removed_on_keep_and_revert(self):
         with tempfile.TemporaryDirectory() as d:
