@@ -177,6 +177,7 @@ function renderCommit() {
   $("#commit-trial").hidden = !t;
   $("#commit-staged").hidden = !!t;
   for (const id of ["#apply", "#discard", "#keep", "#keep-boot", "#revert"]) $(id).disabled = S.busy;
+  $("#reapply-boot").disabled = S.busy || !!t || !c.helper_installed;
   if (t) {
     bar.dataset.mode = "trial";
     text.innerHTML = t.revert_error
@@ -207,6 +208,7 @@ function eventText(e) {
     case "kept": return `Kept${e.persist ? " after reboot" : " until reboot"}: ${changeList(e.values)}`;
     case "persisted": return `Saved for boot: ${[e.gpu && "GPU", e.cpu && "CPU"].filter(Boolean).join(" + ")}`;
     case "failed": return `Failed: ${e.error}`;
+    case "boot_reapplied": return "Boot values re-applied (gb10-clocklock and cpu-epp restarted)";
     case "persist_failed": return `Kept, but saving for boot failed: ${e.error}`;
     case "revert_failed": return `Revert failed: ${e.error}`;
     case "rollback_failed": return `Rollback of ${LABEL[e.knob] || e.knob} failed: ${e.error}`;
@@ -511,6 +513,9 @@ function bind() {
     redrawCharts();
   });
   $("#reset-stats").addEventListener("click", () => post("api/stats/reset").catch(() => {}));
+  $("#reapply-boot").addEventListener("click", () => {
+    if (confirm("Restart gb10-clocklock and cpu-epp now? Clocks and EPP go back to their boot values.")) post("api/reapply-boot").catch(() => {});
+  });
   $("#proc-filter").addEventListener("input", () => S.snap && renderProcs());
   $("#proc-tree").addEventListener("change", () => S.snap && renderProcs());
   document.querySelectorAll(".sort").forEach((b) => b.addEventListener("click", () => {
