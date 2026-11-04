@@ -140,9 +140,10 @@ class HelperTest(unittest.TestCase):
         text = (Path(self.ctx.unit_dir) / "cpu-epp.service.d/50-spark-console.conf").read_text()
         self.assertIn("ExecStartPre=/usr/local/sbin/spark-console-helper wait-governor-unit\n", text)
 
-    def test_reapply_boot_restarts_exactly_the_two_units(self):
+    def test_reapply_boot_restarts_the_boot_clock_units_in_one_transaction(self):
         self.assertEqual(self.main("reapply-boot"), 0)
-        self.assertEqual(self.run.calls, [["/usr/bin/systemctl", "restart", "gb10-clocklock.service", "cpu-epp.service"]])
+        self.assertEqual(self.run.calls, [["/usr/bin/systemctl", "restart", "nv-cpu-governor.service",
+                                           "gb10-clocklock.service", "cpu-epp.service"]])
         self.assertEqual(self.main("reapply-boot", "sshd.service"), 2)
 
     def test_unknown_action_and_extra_args_are_refused(self):

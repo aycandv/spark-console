@@ -198,8 +198,9 @@ def wait_governor_unit(ctx, timeout_s=30, step_s=0.5):
 
 
 def reapply_boot(ctx):
-    """Run the two boot units now, exactly as at boot (ExecStop, then ExecStart with any drop-in)."""
-    ctx.run([SYSTEMCTL, "restart", "gb10-clocklock.service", "cpu-epp.service"])
+    """Run the boot units that set clocks now, in one transaction as at boot, including DGX OS's
+    nv-cpu-governor, so its ordering against cpu-epp is exercised too."""
+    ctx.run([SYSTEMCTL, "restart", "nv-cpu-governor.service", "gb10-clocklock.service", "cpu-epp.service"])
 
 
 ACTIONS = {

@@ -209,7 +209,7 @@ function eventText(e) {
     case "persisted": return `Saved for boot: ${[e.gpu && "GPU", e.cpu && "CPU"].filter(Boolean).join(" + ")}`;
     case "failed": return `Failed: ${e.error}`;
     case "trial_dropped_by_reboot": return `Trial ended by a reboot; boot values apply: ${changeList(e.values)}`;
-    case "boot_reapplied": return "Boot values re-applied (gb10-clocklock and cpu-epp restarted)";
+    case "boot_reapplied": return "Boot values re-applied (nv-cpu-governor, gb10-clocklock and cpu-epp restarted)";
     case "persist_failed": return `Kept, but saving for boot failed: ${e.error}`;
     case "revert_failed": return `Revert failed: ${e.error}`;
     case "rollback_failed": return `Rollback of ${LABEL[e.knob] || e.knob} failed: ${e.error}`;
@@ -515,7 +515,7 @@ function bind() {
   });
   $("#reset-stats").addEventListener("click", () => post("api/stats/reset").catch(() => {}));
   $("#reapply-boot").addEventListener("click", () => {
-    if (confirm("Restart gb10-clocklock and cpu-epp now? Clocks and EPP go back to their boot values.")) post("api/reapply-boot").catch(() => {});
+    if (confirm("Restart nv-cpu-governor, gb10-clocklock and cpu-epp now? Clocks and EPP go back to their boot values.")) post("api/reapply-boot").catch(() => {});
   });
   $("#proc-filter").addEventListener("input", () => S.snap && renderProcs());
   $("#proc-tree").addEventListener("change", () => S.snap && renderProcs());
