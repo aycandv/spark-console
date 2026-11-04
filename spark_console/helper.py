@@ -81,14 +81,16 @@ def _all_policies(ctx: Ctx) -> list:
 
 
 def _markers(ctx: Ctx, mhz) -> None:
-    for d in ctx.run_dirs:
+    """NVML cannot read a -lgc cap back, so record it. run_dirs[0] is ours, the rest are sparkDash's."""
+    boot = _read(ctx.boot_id_path)
+    for i, d in enumerate(ctx.run_dirs):
         path = os.path.join(d, MARKER)
-        if mhz is None:
+        if mhz is None and i > 0:
             if os.path.exists(path):
                 os.remove(path)
             continue
         os.makedirs(d, mode=0o755, exist_ok=True)
-        _write(path, f"{mhz} {_read(ctx.boot_id_path)}\n")
+        _write(path, f"{'none' if mhz is None else mhz} {boot}\n")
 
 
 def _dropin(ctx: Ctx, unit: str, body: str) -> None:

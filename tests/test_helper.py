@@ -1,3 +1,5 @@
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,7 +36,8 @@ class HelperTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def main(self, *argv):
-        return helper.main(list(argv), self.ctx)
+        with contextlib.redirect_stderr(io.StringIO()):  # refusals print a reason; keep test output clean
+            return helper.main(list(argv), self.ctx)
 
     # --- cluster detection -------------------------------------------------
     def test_policies_are_grouped_by_core_type(self):
@@ -50,12 +53,12 @@ class HelperTest(unittest.TestCase):
         for d in self.ctx.run_dirs:
             self.assertEqual(read(Path(d) / "gpu-clock-cap"), "1800 abc-123")
 
-    def test_gpu_reset_removes_markers(self):
+    def test_gpu_reset_records_no_cap_and_removes_sparkdash_marker(self):
         self.main("gpu-cap", "2000")
         self.assertEqual(self.main("gpu-reset"), 0)
         self.assertEqual(self.run.calls[-1], ["/usr/bin/nvidia-smi", "-rgc"])
-        for d in self.ctx.run_dirs:
-            self.assertFalse((Path(d) / "gpu-clock-cap").exists())
+        self.assertEqual(read(Path(self.ctx.run_dirs[0]) / "gpu-clock-cap"), "none abc-123")
+        self.assertFalse((Path(self.ctx.run_dirs[1]) / "gpu-clock-cap").exists())
 
     def test_gpu_cap_refuses_bad_values(self):
         for bad in ["299", "3101", "18x0", "-1800", "1800 -q", "", "0,1800", "1e3", "01800"]:
