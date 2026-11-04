@@ -82,7 +82,7 @@ Requirements:
 
    If you do nothing, the previous values come back at the end of the trial. If a revert fails, the bar shows the error and tries again every 10 s. If the server stops during a trial, it reverts the trial when it starts again (systemd restarts it after 3 s). The **Activity** section records each step.
 
-To go back to the boot values, open **Services** and click **Re-apply Boot Values**. This restarts `gb10-clocklock` and `cpu-epp`.
+To go back to the boot values, open **Services** and click **Re-apply Boot Values**. This restarts `nv-cpu-governor`, `gb10-clocklock` and `cpu-epp` in one transaction, as at boot.
 
 ## Check the boot values
 
