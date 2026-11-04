@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#16181b">
+<title>spark-console</title>
+<link rel="preload" href="vendor/fonts/plex-sans-condensed-500.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="vendor/uplot/uPlot.min.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<a class="skip" href="#channels">Skip to controls</a>
+
+<header class="top">
+  <div class="ident"><span class="host" id="host" translate="no">dgx0</span><span class="silk">spark-console</span></div>
+  <div class="link-state" id="link" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="link-text">Connecting…</span></div>
+  <nav class="out" aria-label="Other dashboards">
+    <a id="to-sparkdash" href="#" target="_blank" rel="noopener">sparkDash</a>
+    <a id="to-dgx" href="#" target="_blank" rel="noopener">DGX Dashboard</a>
+  </nav>
+</header>
+
+<div class="banner" id="banner" hidden></div>
+
+<!-- The commit bar: staged changes, the running trial, and the last outcome. -->
+<section class="commit" id="commit" aria-label="Pending changes" data-mode="idle">
+  <div class="drain" id="drain" aria-hidden="true"></div>
+  <div class="commit-row">
+    <p class="commit-text" id="commit-text">No changes staged.</p>
+    <div class="commit-actions" id="commit-staged">
+      <label class="silk" for="trial-s">Revert after</label>
+      <select id="trial-s">
+        <option value="30">30 s</option><option value="60" selected>60 s</option>
+        <option value="120">2 min</option><option value="300">5 min</option>
+      </select>
+      <button class="btn primary" id="apply" type="button">Apply</button>
+      <button class="btn ghost" id="discard" type="button">Discard</button>
+    </div>
+    <div class="commit-actions" id="commit-trial" hidden>
+      <button class="btn primary" id="keep" type="button">Keep</button>
+      <button class="btn" id="keep-boot" type="button">Keep after reboot</button>
+      <button class="btn ghost" id="revert" type="button">Revert now</button>
+    </div>
+  </div>
+  <p class="commit-error" id="commit-error" role="alert" hidden></p>
+  <p class="sr-only" id="commit-announce" aria-live="polite"></p>
+</section>
+
+<main>
+  <section class="profiles" aria-labelledby="profiles-h">
+    <h2 class="silk" id="profiles-h">Profiles</h2>
+    <div class="profile-list" id="profiles"></div>
+    <button class="btn ghost small" id="save-profile" type="button">Save staged as…</button>
+  </section>
+
+  <section class="channels" id="channels" aria-label="Clock channels" tabindex="-1">
+    <article class="channel" id="ch-gpu" data-knob="gpu_cap_mhz">
+      <header class="ch-head"><span class="ch-num silk">CH1</span><h2>GPU</h2><span class="ch-boot" data-boot></span></header>
+      <div class="ch-set"><span class="silk">Set</span><span class="set-val" data-set></span></div>
+      <div class="ch-read"><span class="read-val" data-read>—</span><span class="read-unit">MHz</span><span class="read-sub" data-sub></span></div>
+      <div class="trace" data-trace role="img" aria-label="GPU SM clock and cap, last minutes"></div>
+      <div class="stepper">
+        <button class="step" type="button" data-step="-1" aria-label="Lower GPU cap by 100 MHz">−</button>
+        <label class="step-field"><span class="sr-only">GPU clock cap in MHz</span>
+          <input type="number" inputmode="numeric" data-input step="100" min="300" max="3100" autocomplete="off"></label>
+        <button class="step" type="button" data-step="1" aria-label="Raise GPU cap by 100 MHz">+</button>
+        <label class="nocap"><input type="checkbox" data-nocap> No cap</label>
+      </div>
+      <ul class="lamps" data-lamps aria-label="GPU clock limits active"></ul>
+    </article>
+
+    <article class="channel" id="ch-x925" data-knob="x925_max_khz">
+      <header class="ch-head"><span class="ch-num silk">CH2</span><h2>CPU · X925</h2><span class="ch-boot" data-boot></span></header>
+      <div class="ch-set"><span class="silk">Set max</span><span class="set-val" data-set></span></div>
+      <div class="ch-read"><span class="read-val" data-read>—</span><span class="read-unit">MHz</span><span class="read-sub" data-sub></span></div>
+      <div class="trace" data-trace role="img" aria-label="X925 cluster clock and max, last minutes"></div>
+      <div class="stepper">
+        <button class="step" type="button" data-step="-1" aria-label="Lower X925 max by 100 MHz">−</button>
+        <label class="step-field"><span class="sr-only">X925 max frequency in MHz</span>
+          <input type="number" inputmode="numeric" data-input step="100" autocomplete="off"></label>
+        <button class="step" type="button" data-step="1" aria-label="Raise X925 max by 100 MHz">+</button>
+      </div>
+      <ul class="lamps" data-lamps aria-label="X925 limits active"></ul>
+    </article>
+
+    <article class="channel" id="ch-a725" data-knob="a725_max_khz">
+      <header class="ch-head"><span class="ch-num silk">CH3</span><h2>CPU · A725</h2><span class="ch-boot" data-boot></span></header>
+      <div class="ch-set"><span class="silk">Set max</span><span class="set-val" data-set></span></div>
+      <div class="ch-read"><span class="read-val" data-read>—</span><span class="read-unit">MHz</span><span class="read-sub" data-sub></span></div>
+      <div class="trace" data-trace role="img" aria-label="A725 cluster clock and max, last minutes"></div>
+      <div class="stepper">
+        <button class="step" type="button" data-step="-1" aria-label="Lower A725 max by 100 MHz">−</button>
+        <label class="step-field"><span class="sr-only">A725 max frequency in MHz</span>
+          <input type="number" inputmode="numeric" data-input step="100" autocomplete="off"></label>
+        <button class="step" type="button" data-step="1" aria-label="Raise A725 max by 100 MHz">+</button>
+      </div>
+      <ul class="lamps" data-lamps aria-label="A725 limits active"></ul>
+    </article>
+  </section>
+
+  <section class="policy" aria-labelledby="policy-h">
+    <h2 class="silk" id="policy-h">CPU policy</h2>
+    <div class="policy-item">
+      <span class="silk" id="epp-l">EPP</span>
+      <div class="epp-stops" role="group" aria-labelledby="epp-l" id="epp-stops"></div>
+      <label class="step-field narrow"><span class="sr-only">EPP value 0 to 255</span>
+        <input type="number" id="epp" min="0" max="255" step="1" inputmode="numeric" autocomplete="off"></label>
+      <span class="policy-now" id="epp-now"></span>
+    </div>
+    <div class="policy-item">
+      <label class="silk" for="governor">Governor</label>
+      <select id="governor"></select>
+      <span class="policy-now" id="gov-now"></span>
+    </div>
+  </section>
+
+  <section class="effect" aria-labelledby="effect-h">
+    <div class="effect-head">
+      <h2 class="silk" id="effect-h">Effect</h2>
+      <div class="seg" role="group" aria-label="Trace window" id="window">
+        <button type="button" data-w="120" aria-pressed="true">2 min</button>
+        <button type="button" data-w="600" aria-pressed="false">10 min</button>
+        <button type="button" data-w="3600" aria-pressed="false">1 h</button>
+      </div>
+    </div>
+    <div class="rail" id="rail"></div>
+  </section>
+
+  <section class="details" aria-label="Details">
+    <details id="d-cores"><summary><span>Cores</span><span class="sum" data-sum></span></summary><div class="cores" id="cores"></div></details>
+    <details id="d-mem"><summary><span>Memory</span><span class="sum" data-sum></span></summary><div id="mem"></div></details>
+    <details id="d-sensors"><summary><span>Sensors</span><span class="sum" data-sum></span></summary>
+      <div class="table-tools"><span class="silk" id="stats-since"></span><button class="btn ghost small" id="reset-stats" type="button">Reset min/max</button></div>
+      <div class="scroll"><table class="grid"><thead><tr><th scope="col">Sensor</th><th scope="col">Now</th><th scope="col">Min</th><th scope="col">Max</th><th scope="col">Avg</th></tr></thead><tbody id="sensors"></tbody></table></div>
+    </details>
+    <details id="d-procs"><summary><span>Processes</span><span class="sum" data-sum></span></summary>
+      <div class="table-tools">
+        <label class="filter"><span class="sr-only">Filter processes</span><input type="search" id="proc-filter" placeholder="Filter by name or PID…" autocomplete="off" spellcheck="false"></label>
+        <label class="check"><input type="checkbox" id="proc-tree"> Tree</label>
+      </div>
+      <div class="scroll tall"><table class="grid"><thead><tr>
+        <th scope="col">PID</th><th scope="col">Name</th>
+        <th scope="col" aria-sort="descending"><button type="button" class="sort" data-sort="cpu">CPU %</button></th>
+        <th scope="col"><button type="button" class="sort" data-sort="rss_mib">RSS MiB</button></th>
+        <th scope="col"><button type="button" class="sort" data-sort="gpu_mib">GPU MiB</button></th>
+        <th scope="col">State</th></tr></thead><tbody id="procs"></tbody></table></div>
+    </details>
+    <details id="d-llm"><summary><span>LLM servers</span><span class="sum" data-sum></span></summary>
+      <div class="scroll"><table class="grid"><thead><tr><th scope="col">Endpoint</th><th scope="col">Engine</th><th scope="col">Model</th><th scope="col">tok/s</th><th scope="col">Running</th></tr></thead><tbody id="llm"></tbody></table></div>
+    </details>
+    <details id="d-services"><summary><span>Services</span><span class="sum" data-sum></span></summary>
+      <div class="scroll"><table class="grid"><thead><tr><th scope="col">Unit</th><th scope="col">State</th><th scope="col">At boot</th></tr></thead><tbody id="services"></tbody></table></div>
+    </details>
+    <details id="d-activity"><summary><span>Activity</span><span class="sum" data-sum></span></summary><ol class="activity" id="activity"></ol></details>
+  </section>
+</main>
+
+<dialog id="profile-dialog" aria-labelledby="pd-h">
+  <form method="dialog" id="profile-form">
+    <h2 id="pd-h">Save staged values as a profile</h2>
+    <label for="profile-name">Name</label>
+    <input id="profile-name" name="name" required maxlength="40" pattern="[A-Za-z0-9 ._\-]{1,40}" autocomplete="off" placeholder="Bench…">
+    <p class="hint" id="profile-hint">Stage values with the controls first.</p>
+    <div class="dialog-actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save">Save Profile</button></div>
+  </form>
+</dialog>
+
+<script src="vendor/uplot/uPlot.iife.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
