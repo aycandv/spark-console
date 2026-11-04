@@ -500,7 +500,7 @@ dialog h2 { font-size: var(--t-18); }
 .rung b { font-size: var(--t-16); font-weight: 600; line-height: 1; }
 .rung-tag { margin-left: auto; padding-right: 4px; font-size: var(--t-11); font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; white-space: nowrap; }
 /* no measurement: the bands stay in colour but fade toward the paper; the letters keep full ink */
-.ticket[data-state="idle"] .rung, .ticket[data-state="hold"] .rung { background: color-mix(in srgb, var(--band) 60%, var(--paper)); }
+.ticket[data-state="idle"] .rung, .ticket[data-state="warming"] .rung, .ticket[data-state="hold"] .rung { background: color-mix(in srgb, var(--band) 60%, var(--paper)); }
 .arrows { position: relative; height: calc(7 * 32px - 4px); }
 .arrow { position: absolute; right: 0; top: 0; transition: transform 240ms var(--ease), opacity 200ms var(--ease); }
 .arrow svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }

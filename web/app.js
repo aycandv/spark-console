@@ -854,6 +854,7 @@ function energyView() {
     const cn = classNow(H, now, S.scale);
     v.state = cn.state;
     v.now = cn.state === "ok" ? cn : null;
+    v.warmN = cn.n;
     // After a trial, the tab keeps the decode change for the 4 s outcome window.
     if (S.outcome && Date.now() < S.outcome.until) v.deltas = { tok: S.outcome.evidence?.["llm.tok_s"] };
   }

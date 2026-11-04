@@ -37,10 +37,21 @@ test("bandText names the open ends", () => {
   assert.equal(bandText(2), "0.35–0.50");
 });
 
+test("classNow warms up while decoding but with too few samples", () => {
+  // Page just loaded: two decoding samples so far, tok/s clearly above the minimum.
+  const H = hist(range(1000, 1002, () => ({ "llm.tok_s": 43.6, "llm.j_per_tok": 0.5 })));
+  const c = classNow(H, 1001);
+  assert.equal(c.state, "warming");
+  assert.equal(c.n, 2);
+  // Not decoding now: still idle, even with a few gated samples earlier in the window.
+  const H2 = hist(range(1000, 1010, (t) => ({ "llm.tok_s": t < 1002 ? 40 : 1, "llm.j_per_tok": 0.5 })));
+  assert.equal(classNow(H2, 1009).state, "idle");
+});
+
 test("classNow ignores samples below the decode minimum", () => {
   // 30 s of 0.42 J/tok, but only 2 samples with tok/s >= 5.
   const H = hist(range(1000, 1030, (t) => ({ "llm.tok_s": t >= 1028 ? 40 : 2, "llm.j_per_tok": 0.42 })));
-  assert.equal(classNow(H, 1029).state, "idle");
+  assert.equal(classNow(H, 1029).state, "warming");  // decoding now, but only 2 gated samples
   const H2 = hist(range(1000, 1030, () => ({ "llm.tok_s": 40, "llm.j_per_tok": 0.42 })));
   const c = classNow(H2, 1029);
   assert.equal(c.state, "ok");

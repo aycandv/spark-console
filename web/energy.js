@@ -1,6 +1,6 @@
 /* Energy class drawer: the tab (a pill on a phone), the paper ticket, its burn frame, and the scale dialog.
    app.js computes the view (metrics.js); this module only draws it and handles open/close. */
-import { LETTERS, bandText, SCALE_DEFAULT, validScale } from "./metrics.js";
+import { LETTERS, MIN_N, bandText, SCALE_DEFAULT, validScale } from "./metrics.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -119,6 +119,7 @@ export function initEnergy({ fmt, signed, announce, reduced, glide, onScale }) {
     // class line, state line, trade table, honesty line
     let line, state = "";
     if (st === "hold") { line = "Class on hold"; state = "The class is on hold until the revert succeeds."; }
+    else if (st === "warming") { line = `Measuring · ${fmt(v.tokNow, 1)} tok/s`; state = `Measuring the class… ${v.warmN ?? 0} of ${MIN_N} decode samples.`; }
     else if (st === "idle") { line = `No class · ${fmt(v.tokNow, 1)} tok/s`; state = `No decode traffic: the class needs ${fmt(scale.min)} tok/s or more.`; }
     else if (st === "below") {
       line = [`Was ${LETTERS[beforeK]} → no class`, part(v.deltas?.w, "W", 1), dw ? dw.pill : `now ${fmt(v.tokNow, 1)} tok/s`].filter(Boolean).join(" · ");

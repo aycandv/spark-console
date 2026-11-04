@@ -169,7 +169,8 @@ try {
   check(covered === 0, `no control or readout under the open drawer or its tab (${covered})`);
   check(await evaluate(`document.querySelectorAll("#ladder li").length === 7`), "ladder has 7 rungs");
   const rung = await evaluate(`(() => { const r = getComputedStyle(document.querySelector("#ladder .rung")); return { f: r.filter, o: r.opacity, bg: r.backgroundColor }; })()`);
-  check(await evaluate(`document.querySelector("#ticket").dataset.state === "idle"`), "ticket in the idle state");
+  // No class yet: "idle" without decode traffic, "warming" while the first decode samples come in.
+  check(await evaluate(`["idle", "warming"].includes(document.querySelector("#ticket").dataset.state)`), "ticket shows no class yet (idle or warming)");
   check(rung.f === "none" && rung.o === "1" && !/^rgb\((\d+), \1, \1\)$/.test(rung.bg), `ladder keeps its colours with no class (${rung.bg})`);
   await shot("drawer-dark.png", false);
   await press("Escape");

@@ -109,7 +109,13 @@ function jClass(H, from, to, scale, incl) {
 /* The class now: 30 s median of J/token while decoding. */
 export function classNow(H, now, scale = SCALE_DEFAULT) {
   const c = jClass(H, now - WINDOW_S, now, { ...scale }, true);
-  return c ? { state: "ok", ...c } : { state: "idle" };
+  if (c) return { state: "ok", ...c };
+  // Decoding right now but too few samples yet (e.g. just after page load): warming up, not idle.
+  const tok = windowSamples(H, "llm.tok_s", now - WINDOW_S, now, null, true)[0];
+  if (tok != null && tok >= scale.min) {
+    return { state: "warming", n: windowSamples(H, "llm.j_per_tok", now - WINDOW_S, now, scale.min, true).length };
+  }
+  return { state: "idle" };
 }
 /* During a trial: the class before (30 s up to the start) and now (from start + 10 s).
    "below-min": decode goes on after the start, but below the minimum, so there is no class. */
