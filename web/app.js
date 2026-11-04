@@ -208,6 +208,7 @@ function eventText(e) {
     case "kept": return `Kept${e.persist ? " after reboot" : " until reboot"}: ${changeList(e.values)}`;
     case "persisted": return `Saved for boot: ${[e.gpu && "GPU", e.cpu && "CPU"].filter(Boolean).join(" + ")}`;
     case "failed": return `Failed: ${e.error}`;
+    case "trial_dropped_by_reboot": return `Trial ended by a reboot; boot values apply: ${changeList(e.values)}`;
     case "boot_reapplied": return "Boot values re-applied (gb10-clocklock and cpu-epp restarted)";
     case "persist_failed": return `Kept, but saving for boot failed: ${e.error}`;
     case "revert_failed": return `Revert failed: ${e.error}`;

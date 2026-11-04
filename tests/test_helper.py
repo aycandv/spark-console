@@ -121,6 +121,25 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(self.run.calls, [])
         self.assertEqual(read(Path(self.ctx.run_dirs[1]) / "gpu-clock-cap"), "2100 abc-123")
 
+    def test_wait_governor_unit_polls_until_nv_cpu_governor_has_exited(self):
+        states = iter(["activating", "active", "active", "inactive"])
+        self.ctx.show = lambda unit: next(states)
+        self.ctx.sleep = lambda s: None
+        self.assertEqual(self.main("wait-governor-unit"), 0)
+        self.assertEqual(next(states, "done"), "done")  # it read all four states
+
+    def test_wait_governor_unit_gives_up_after_timeout(self):
+        self.ctx.show = lambda unit: "active"
+        slept = []
+        self.ctx.sleep = slept.append
+        self.assertEqual(self.main("wait-governor-unit"), 0)  # never blocks boot for good
+        self.assertAlmostEqual(sum(slept), 30, delta=0.5)
+
+    def test_persist_cpu_waits_for_nv_cpu_governor_first(self):
+        self.main("persist-cpu", "0", "3900000", "2808000", "ondemand")
+        text = (Path(self.ctx.unit_dir) / "cpu-epp.service.d/50-spark-console.conf").read_text()
+        self.assertIn("ExecStartPre=/usr/local/sbin/spark-console-helper wait-governor-unit\n", text)
+
     def test_reapply_boot_restarts_exactly_the_two_units(self):
         self.assertEqual(self.main("reapply-boot"), 0)
         self.assertEqual(self.run.calls, [["/usr/bin/systemctl", "restart", "gb10-clocklock.service", "cpu-epp.service"]])

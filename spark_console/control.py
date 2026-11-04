@@ -70,9 +70,11 @@ def validate(changes: dict, limits: dict) -> dict:
 
 
 class Controller:
-    def __init__(self, run, read_current, read_limits, read_persisted, clock=time.monotonic, trial_s=60, journal=None):
+    def __init__(self, run, read_current, read_limits, read_persisted, clock=time.monotonic, trial_s=60, journal=None,
+                 boot_id_path=helper.Ctx.boot_id_path):
         self._run, self._current, self._limits, self._persisted = run, read_current, read_limits, read_persisted
         self._journal = journal  # file that records an open trial, so a restarted server can revert it
+        self._boot_id_path = boot_id_path
         self._clock, self.trial_s = clock, trial_s
         self._lock = threading.RLock()
         self._trial = None
@@ -83,8 +85,15 @@ class Controller:
             os.makedirs(os.path.dirname(self._journal), exist_ok=True)
             tmp = self._journal + ".tmp"
             with open(tmp, "w") as f:
-                json.dump({"applied": t["applied"], "prev": t["prev"], "total_s": t["total_s"]}, f)
+                json.dump({"applied": t["applied"], "prev": t["prev"], "total_s": t["total_s"], "boot_id": self._boot_id()}, f)
             os.replace(tmp, self._journal)
+
+    def _boot_id(self):
+        try:
+            with open(self._boot_id_path) as f:
+                return f.read().strip()
+        except OSError:
+            return None
 
     def _journal_clear(self):
         if self._journal and os.path.exists(self._journal):
@@ -97,6 +106,11 @@ class Controller:
         with self._lock:
             with open(self._journal) as f:
                 j = json.load(f)
+            if j.get("boot_id") != self._boot_id():
+                # The machine rebooted: the boot units already set the boot values, which must win.
+                self._journal_clear()
+                self._event("trial_dropped_by_reboot", values=j.get("applied", {}))
+                return
             now = self._clock()
             self._trial = {"applied": j["applied"], "prev": j["prev"], "started": now, "deadline": now,
                            "total_s": j.get("total_s", 0)}
