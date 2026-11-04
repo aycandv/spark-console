@@ -262,6 +262,7 @@ class Sampler:
             series[f"temp.{s['id']}"] = s["temp_c"]
         self.history.add(now, series)
         self.stats.add({k: v for k, v in series.items() if not k.startswith("set.")})
+        snap["series"] = series
         snap["stats"] = self.stats.get()
         snap["stats_since"] = self.stats.since
         with self.cond:
