@@ -119,6 +119,18 @@ To change the theme, click **Auto**, **Dark** or **Light** in the header. **Auto
 
 The trial keys work 0.6 s after the trial starts. To turn off the single-key shortcuts, click **Keyboard shortcuts** at the bottom of the page.
 
+## Check a live console
+
+This check is safe on the real machine. It sends no request that changes a setting.
+
+1. Run the live check against the tailnet URL:
+
+   ```sh
+   node scripts/ui_live_check.mjs https://<node>.<tailnet>.ts.net:9443/ /tmp <your-tailnet-login>
+   ```
+
+   The last line is `ui live check: pass`. Screenshots go to `/tmp`.
+
 ## Check the boot values
 
 Do this after a reboot, or after **Re-apply Boot Values**.

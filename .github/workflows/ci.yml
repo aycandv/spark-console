@@ -26,6 +26,6 @@ jobs:
       - name: Client unit tests
         run: node --test tests/web/*.test.mjs
       - name: JavaScript syntax
-        run: for f in web/*.js scripts/ui_smoke.mjs; do node --check "$f" || exit 1; done
+        run: for f in web/*.js scripts/*.mjs; do node --check "$f" || exit 1; done
       - name: Shell scripts
         run: shellcheck deploy/*.sh
