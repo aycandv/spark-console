@@ -1,0 +1,101 @@
+"""python3 -m spark_console [--port 5566] [--simulate]"""
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+import threading
+
+from . import control, sampler, server
+
+DEFAULT_LLM = ["http://172.17.0.1:8890", "http://172.17.0.1:8888", "http://127.0.0.1:8889"]
+WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
+
+
+def tailnet_identity():
+    """(owner login, MagicDNS name) of this node, or (None, None) without Tailscale."""
+    try:
+        d = json.loads(subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5).stdout)
+        me = d["Self"]
+        return d["User"][str(me["UserID"])]["LoginName"], me["DNSName"].rstrip(".").lower()
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return None, None
+
+
+class Simulated:
+    """--simulate: controls change an in-memory overlay instead of the hardware (for UI work without root)."""
+
+    def __init__(self, real_current):
+        self.real, self.overlay = real_current, {}
+
+    def run(self, args):
+        a = args
+        if a[0] == "gpu-cap":
+            self.overlay["gpu_cap_mhz"] = int(a[1])
+        elif a[0] == "gpu-reset":
+            self.overlay["gpu_cap_mhz"] = None
+        elif a[0] == "cpu-epp":
+            self.overlay["epp"] = int(a[1])
+        elif a[0] == "cpu-governor":
+            self.overlay["governor"] = a[1]
+        elif a[0] == "cpu-max":
+            self.overlay[f"{a[1]}_max_khz"] = int(a[2])
+        print("simulate: helper", *args, flush=True)
+
+    def current(self):
+        return {**self.real(), **self.overlay}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="spark-console")
+    ap.add_argument("--bind", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=5566)
+    ap.add_argument("--trial", type=int, default=60, help="seconds before an applied change reverts")
+    ap.add_argument("--llm", action="append", help="LLM server base URL with Prometheus /metrics (repeatable)")
+    ap.add_argument("--owner", help="tailnet login allowed in (default: this node's owner)")
+    ap.add_argument("--profiles", default=os.path.expanduser("~/.config/spark-console/profiles.json"))
+    ap.add_argument("--simulate", action="store_true", help="do not touch hardware; controls change an overlay")
+    args = ap.parse_args(argv)
+
+    owner, dns = tailnet_identity()
+    owner = args.owner or owner
+    hostnames = {"127.0.0.1", "localhost", "::1"} | ({dns} if dns else set())
+
+    real_current, limits, persisted = control.make_readers()
+    if args.simulate:
+        sim = Simulated(real_current)
+        run, current = sim.run, sim.current
+    else:
+        run, current = control.sudo_helper, real_current
+    ctl = control.Controller(run=run, read_current=current, read_limits=limits, read_persisted=persisted,
+                             trial_s=args.trial)
+
+    def control_state():
+        return {**ctl.status(), "current": current(), "limits": limits(), "simulate": args.simulate,
+                "default_trial_s": ctl.trial_s, "helper_installed": args.simulate or os.path.exists(control.HELPER_PATH)}
+
+    smp = sampler.Sampler(llm_urls=args.llm or DEFAULT_LLM)
+    smp.control_status = control_state
+    app = server.App(sampler=smp, controller=ctl, profiles=control.ProfileStore(args.profiles), owner=owner,
+                     hostnames=hostnames, web_dir=WEB_DIR, control_state=control_state)
+    threading.Thread(target=smp.run_forever, kwargs={"on_tick": ctl.tick}, daemon=True, name="sampler").start()
+    httpd = server.make_server(app, args.bind, args.port)
+
+    def stop(*_):
+        # A trial must not outlive the server: put the previous values back first.
+        try:
+            ctl.shutdown()
+        finally:
+            threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    print(f"spark-console on http://{args.bind}:{args.port} owner={owner} hosts={sorted(hostnames)}"
+          f"{' SIMULATE' if args.simulate else ''}", flush=True)
+    httpd.serve_forever()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
