@@ -16,12 +16,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - name: Unit tests
         run: python -m unittest discover -s tests -t . -v
       - name: Byte-compile
         run: python -m compileall -q spark_console tests scripts
       - name: Client unit tests
-        run: node --test tests/web/
+        run: node --test tests/web/*.test.mjs
       - name: JavaScript syntax
         run: for f in web/*.js scripts/ui_smoke.mjs; do node --check "$f" || exit 1; done
       - name: Shell scripts
