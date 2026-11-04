@@ -1,0 +1,15 @@
+[Unit]
+Description=spark-console (GPU/CPU control panel for this DGX Spark)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/projects/spark-console
+ExecStart=/usr/bin/python3 -m spark_console --port 5566
+Restart=on-failure
+RestartSec=3
+# SIGTERM makes the server revert an open trial before it exits.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
