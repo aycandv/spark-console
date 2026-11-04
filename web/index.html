@@ -39,6 +39,7 @@
     <div class="commit-lead">
       <b class="staged-count" id="staged-count"></b>
       <span class="chip chip-trial">Trial</span>
+      <span class="silk countdown-l" id="countdown-pre" hidden>Reverting in</span>
       <p class="countdown" id="countdown" role="timer" aria-atomic="true"></p>
       <span class="silk countdown-l" id="countdown-l">to revert</span>
       <span class="chip chip-out" id="chip-out" data-kind="" hidden></span>
@@ -57,8 +58,8 @@
       <button class="btn primary" id="apply" type="button" aria-keyshortcuts="A"><span data-label>Apply</span><kbd aria-hidden="true">A</kbd></button>
     </div>
     <div class="commit-actions" id="commit-trial" hidden>
-      <button class="btn" id="keep-boot" type="button" aria-keyshortcuts="B"><span data-label>Keep after reboot</span><kbd aria-hidden="true">B</kbd></button>
       <button class="btn primary" id="keep" type="button" aria-keyshortcuts="K"><span data-label>Keep</span><kbd aria-hidden="true">K</kbd></button>
+      <button class="btn" id="keep-boot" type="button" aria-keyshortcuts="B"><span data-label>Keep after reboot</span><kbd aria-hidden="true">B</kbd></button>
       <button class="btn" id="revert" type="button" aria-keyshortcuts="R"><span data-label>Revert now</span><kbd aria-hidden="true">R</kbd></button>
     </div>
   </div>
@@ -217,9 +218,8 @@
 
 <!-- Energy class: a slim tab at the right edge (a pill on a phone) and its drawer. Siblings, both fixed. -->
 <button class="ec-tab" id="ec-tab" type="button" aria-expanded="false" aria-controls="energy" aria-keyshortcuts="E">
-  <span class="ec-sw" data-k=""><span data-letter>–</span></span>
-  <span class="ec-tab-d" data-tabdelta></span>
-  <span class="silk ec-tab-dl" data-tabdl>tok/s</span>
+  <span class="ec-sw" data-k="" aria-hidden="true"><span data-letter></span></span>
+  <span class="ec-tab-d" data-tabdelta aria-hidden="true"></span>
   <span class="silk ec-tab-word" aria-hidden="true">Energy</span>
   <span class="ec-pill" aria-hidden="true" data-pill>Energy</span>
   <svg class="ec-chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M6.5 2 3.5 5l3 3"/></svg>
@@ -253,6 +253,7 @@
     <p class="t-foot" id="t-foot">Console J/token scale, not an EU rating.</p>
   </div>
 </aside>
+<div class="ec-scrim" id="ec-scrim" aria-hidden="true"></div>
 
 <dialog id="profile-dialog" aria-labelledby="pd-h" aria-describedby="profile-hint">
   <form method="dialog" id="profile-form">
@@ -269,12 +270,12 @@
     <h2 id="scale-h">Edit the class scale</h2>
     <p class="hint">This browser’s J/token bands. Each band is a fixed factor wider than the one above it.</p>
     <div class="scale-fields">
-      <label for="sc-a">Class A ends at (J/token)</label><input type="number" id="sc-a" step="0.01" min="0.01" inputmode="decimal">
-      <label for="sc-r">Step factor (×)</label><input type="number" id="sc-r" step="0.01" min="1.01" inputmode="decimal">
-      <label for="sc-min">Count decode above (tok/s)</label><input type="number" id="sc-min" step="1" min="0" inputmode="numeric">
+      <label for="sc-a">Class A ends at (J/token)</label><input type="number" id="sc-a" step="0.01" min="0.01" inputmode="decimal" required aria-describedby="scale-error">
+      <label for="sc-r">Step factor (×)</label><input type="number" id="sc-r" step="0.01" min="1.01" inputmode="decimal" required aria-describedby="scale-error">
+      <label for="sc-min">Count decode at or above (tok/s)</label><input type="number" id="sc-min" step="1" min="0" inputmode="numeric" required aria-describedby="scale-error">
     </div>
     <table class="grid scale-preview"><caption class="sr-only">Resulting bands</caption><thead><tr><th scope="col">Class</th><th scope="col" class="num">J/token</th></tr></thead><tbody id="scale-preview"></tbody></table>
-    <p class="commit-error" id="scale-error" hidden>Class A must end above 0, the factor must be above 1 and the decode minimum at 0 or more.</p>
+    <p class="commit-error" id="scale-error" role="alert" hidden>Class A must end above 0, the factor must be above 1 and the decode minimum at 0 or more.</p>
     <div class="dialog-actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn" value="reset" formnovalidate>Reset to default</button><button class="btn primary" value="save">Use this scale</button></div>
   </form>
 </dialog>

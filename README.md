@@ -96,7 +96,11 @@ The energy class is the GPU energy per token (J/token) on a scale from A to G. I
 
    They show the values before the trial and now, the change, and a verdict: better, worse or within noise. If the class is better but decode is slower by more than the noise, the label shows a warning.
 
-3. To close the drawer, press `Esc` or click **×**.
+   The verdict comes 20 s after **Apply**: 10 s for the clocks to settle, then 10 samples. Until then, the table shows "measuring". If decode is below the decode minimum (5 tok/s by default) in the trial, there is no class. The label then shows the decode change and a warning.
+
+3. To close the drawer, press `Esc` or click **×**. On a phone, you can also tap the page above the drawer.
+
+   The drawer is closed each time the page loads.
 
 To change the scale, click **Edit scale** in the drawer. The scale is kept in this browser only.
 

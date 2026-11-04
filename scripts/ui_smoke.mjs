@@ -1,9 +1,10 @@
 // UI smoke check through the Chrome DevTools Protocol (Node >= 22, google-chrome).
 // Run against a server started with --simulate --bind 127.0.0.1 --port 5567 --owner dev@local:
 //   node scripts/ui_smoke.mjs http://127.0.0.1:5567/ OUT_DIR dev@local [CDP_PORT]
-// It checks both themes, stable nodes, the staged and trial states, the Energy Class drawer,
-// the keyboard shortcuts, reduced motion and the phone layout, and writes screenshots to OUT_DIR.
-// Exit code 1 on any failure. The last line is "ui smoke: pass".
+// It checks both themes, stable nodes, the staged and trial states, the Energy Class drawer (open, close,
+// Escape, focus return, honesty line), the keyboard shortcuts, reduced motion and the phone layout, and
+// writes screenshots to OUT_DIR. It refuses to run unless the server is in simulate mode (it opens and keeps
+// trials). Exit code 1 on any failure. The last line is "ui smoke: pass".
 import { spawn } from "node:child_process";
 import { writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,6 +38,26 @@ const shot = async (name, full = true) => {
 };
 const check = (cond, msg) => { if (!cond) throw new Error(`check failed: ${msg}`); console.log(`ok - ${msg}`); };
 const KEYS = { e: [69, "KeyE"], k: [75, "KeyK"], Escape: [27, "Escape"] };
+const isOpen = () => evaluate(`document.querySelector("#energy").hasAttribute("data-open")`);
+const activeIs = (sel) => evaluate(`document.activeElement === document.querySelector(${JSON.stringify(sel)})`);
+// Synthetic decode samples (simulate mode only, through window.__sc): before the trial 40 tok/s at 26 W
+// (0.65 J/token, class D), after it 28 tok/s at 12.6 W (0.45 J/token, class C). A lower class with a slower
+// decode: the drawer must say so. IDLE: no decode at all (the most common real state).
+const INJECT = `window.__inj = setInterval(() => {
+  const { H, S } = window.__sc, st = S.trialStarted, n = H.t.length;
+  const col = (k) => (H.cols[k] ||= new Array(n).fill(null));
+  const tok = col("llm.tok_s"), w = col("gpu.power_w"), j = col("llm.j_per_tok");
+  for (let i = Math.max(0, n - 200); i < n; i++) {
+    const t = H.t[i], after = st != null && t >= st, jit = Math.sin(t * 1.7);
+    tok[i] = (after ? 28 : 40) + 0.6 * jit;
+    w[i] = (after ? 12.6 : 26) + 0.3 * jit;
+    j[i] = Math.round((w[i] / tok[i]) * 1000) / 1000;
+  }
+}, 100)`;
+const IDLE = `window.__idle = setInterval(() => {
+  const { H } = window.__sc, n = H.t.length;
+  for (const k of ["llm.tok_s", "llm.j_per_tok"]) { const c = (H.cols[k] ||= new Array(n).fill(null)); for (let i = Math.max(0, n - 200); i < n; i++) c[i] = k === "llm.tok_s" ? 0 : null; }
+}, 100)`;
 const press = async (key) => {
   const [vk, code] = KEYS[key];
   const text = key.length === 1 ? key : undefined;
@@ -101,6 +122,9 @@ try {
   await revertIfOpen();
   await sleep(1200);
 
+  // --- guard: never point this at the live service ---
+  check(await evaluate(`fetch("api/state").then((r) => r.json()).then((s) => s.control?.simulate === true)`), "server runs in simulate mode");
+
   // --- base checks and the dark theme ---
   check(await evaluate(`document.querySelector("#link").dataset.ok === "1"`), "live stream connected");
   check(await evaluate(`/\\d/.test(document.querySelector("#ch-gpu [data-read]").textContent)`), "GPU read-back shows a number");
@@ -108,23 +132,62 @@ try {
   check(await evaluate(`document.documentElement.dataset.theme === "auto"`), "theme starts at Auto");
   check(await bodyBg() === "rgb(20, 22, 25)", "Auto + OS dark: dark chassis");
   check(await evaluate(`document.documentElement.dataset.chartTheme === "dark"`), "charts drawn for dark");
+  check(!(await isOpen()), "drawer starts closed");
   await shot("desktop-top-dark.png", false);
   await evaluate(`document.querySelectorAll("details").forEach((d) => d.open = true)`);
   await sleep(1500);
   check(await evaluate(`document.querySelectorAll("#sensors tr").length > 3`), "sensor table filled");
   check(await evaluate(`document.querySelectorAll("#procs tr").length > 10`), "process table filled");
   await shot("desktop-dark.png");
+  await evaluate(`document.querySelectorAll("details").forEach((d) => d.open = false)`);
 
   // --- stable nodes: focus and node identity survive ticks ---
+  await evaluate(`document.querySelector("#d-sensors").open = true`);
+  await sleep(1200);
   await evaluate(`document.querySelector('[data-epp="0"]').focus()`);
   await evaluate(`window.__pf = document.querySelector("#profiles .pf-btn"); window.__row = document.querySelector("#sensors tr")`);
   await sleep(3000);
-  check(await evaluate(`document.activeElement === document.querySelector('[data-epp="0"]')`), "focused EPP stop survives 3 ticks");
+  check(await activeIs('[data-epp="0"]'), "focused EPP stop survives 3 ticks");
   check(await evaluate(`window.__pf.isConnected`), "profile button node survives 3 ticks");
   check(await evaluate(`window.__row.isConnected`), "sensor row node survives 3 ticks");
-  await evaluate(`document.activeElement.blur()`);
+  await evaluate(`document.querySelector("#d-sensors").open = false; document.activeElement.blur(); window.scrollTo(0, 0)`);
 
-  // --- light theme: OS light, then the toggle forces dark, and a reload keeps it ---
+  // --- energy drawer, idle: E opens it, the page makes room, Escape closes it and focus comes back ---
+  await evaluate(IDLE);
+  await sleep(1500);
+  check(await evaluate(`getComputedStyle(document.querySelector("#ec-tab .ec-sw")).display === "none"`), "no class: the tab shows no swatch");
+  await press("e");
+  check(await evaluate(`!document.querySelector("#energy").inert && document.querySelector("#ec-tab").getAttribute("aria-expanded") === "true"`), "E opens the drawer");
+  check(await activeIs("#energy-h"), "focus moves to the drawer heading");
+  check(await evaluate(`getComputedStyle(document.querySelector("#energy-h")).outlineStyle === "none"`), "the heading draws no focus ring");
+  await sleep(500);
+  const left = await evaluate(`document.querySelector("#energy").getBoundingClientRect().left`);
+  check(Math.abs(left - (1440 - 340)) < 1, `drawer slides in to 1440 − 340 px (${left})`);
+  const covered = await evaluate(`(() => { const d = document.querySelector("#energy").getBoundingClientRect(), t = document.querySelector("#ec-tab").getBoundingClientRect();
+    return [...document.querySelectorAll("main button, main input, main select, .readout")].filter((e) => { const r = e.getBoundingClientRect();
+      return r.width && r.bottom > d.top && (r.right > d.left || (r.right > t.left && r.left < t.right && r.bottom > t.top && r.top < t.bottom)); }).length; })()`);
+  check(covered === 0, `no control or readout under the open drawer or its tab (${covered})`);
+  check(await evaluate(`document.querySelectorAll("#ladder li").length === 7`), "ladder has 7 rungs");
+  const rung = await evaluate(`(() => { const r = getComputedStyle(document.querySelector("#ladder .rung")); return { f: r.filter, o: r.opacity, bg: r.backgroundColor }; })()`);
+  check(await evaluate(`document.querySelector("#ticket").dataset.state === "idle"`), "ticket in the idle state");
+  check(rung.f === "none" && rung.o === "1" && !/^rgb\((\d+), \1, \1\)$/.test(rung.bg), `ladder keeps its colours with no class (${rung.bg})`);
+  await shot("drawer-dark.png", false);
+  await press("Escape");
+  await sleep(50);
+  check(await evaluate(`document.querySelector("#energy").inert && document.querySelector("#ec-tab").getAttribute("aria-expanded") === "false"`), "Escape closes the drawer");
+  check(await activeIs("#ec-tab"), "focus returns to the tab (opened with nothing focused)");
+  await sleep(300);
+  // Escape works wherever focus is: open, move focus to a page control, Escape.
+  await press("e");
+  await evaluate(`document.querySelector('[data-epp="0"]').focus()`);
+  await press("Escape");
+  await sleep(50);
+  check(!(await isOpen()), "Escape closes the drawer while focus is on the page");
+  check(await activeIs('[data-epp="0"]'), "focus stays on the page control");
+  await evaluate(`document.activeElement.blur()`);
+  await sleep(300);
+
+  // --- light theme: OS light, the drawer in light, then the toggle forces dark and a reload keeps it ---
   await setScheme("light");
   await sleep(400);
   check(await bodyBg() === "rgb(233, 235, 238)", "Auto + OS light: light chassis");
@@ -132,6 +195,11 @@ try {
   await evaluate(`window.scrollTo(0, 0)`);
   await shot("desktop-top-light.png", false);
   await shot("desktop-light.png");
+  await evaluate(`window.scrollTo(0, 0); document.querySelector("#ec-tab").click()`);
+  check(await isOpen(), "a click on the tab opens the drawer");
+  await sleep(500);
+  await shot("drawer-light.png", false);
+  await evaluate(`clearInterval(window.__idle)`);
   await clickTheme("dark");
   await sleep(200);
   check(await bodyBg() === "rgb(20, 22, 25)", "Dark toggle wins over OS light");
@@ -140,6 +208,7 @@ try {
   await sleep(4000);
   check(await bodyBg() === "rgb(20, 22, 25)" && await evaluate(`document.documentElement.dataset.theme === "dark"`), "Dark survives a reload");
   check(await evaluate(`document.documentElement.dataset.chartTheme === "dark"`), "charts drawn for the forced theme");
+  check(!(await isOpen()), "the drawer is closed again after a reload");
 
   // --- staged state ---
   const epp = await stageTrial();
@@ -147,14 +216,25 @@ try {
   check(await evaluate(`document.querySelector("#ch-gpu").dataset.pending === "1"`), "GPU strip marked staged");
   await evaluate(`window.scrollTo(0, 0)`);
   await shot("staged-dark.png", false);
+  await clickTheme("light");
+  await sleep(300);
+  await shot("staged-light.png", false);
+  await clickTheme("dark");
+  await sleep(200);
+  // Discard hides itself: focus must land on the bar text, not on <body>.
+  await evaluate(`document.querySelector("#discard").focus(); document.querySelector("#discard").click()`);
+  check(await mode() !== "staged" && await activeIs("#commit-text"), "Discard moves focus to the bar text");
+  await stageTrial();
 
-  // --- trial band ---
+  // --- trial band, with synthetic decode samples ---
+  await evaluate(INJECT);
   check(await startTrial(), "trial running after Apply");
   check(await evaluate(`document.querySelector("#keep").getAttribute("aria-disabled") === "true"`), "Keep is not armed at once");
   await sleep(50);
   const drain = await evaluate(`new DOMMatrix(getComputedStyle(document.querySelector("#drain")).transform).a`);
   check(drain >= 0.9, `drain starts full, not from 0 (${drain.toFixed(3)})`);
-  check(await evaluate(`document.activeElement === document.querySelector("#keep")`), "focus moves to Keep after Apply");
+  check(await activeIs("#keep"), "focus moves to Keep after Apply");
+  check(await evaluate(`[...document.querySelectorAll("#commit-trial .btn")].map((b) => b.id).join() === "keep,keep-boot,revert"`), "actions in order: Keep, Keep after reboot, Revert now");
   check(await evaluate(`document.querySelector(".commit .chip-trial").innerText.trim() === "TRIAL"`), "filled TRIAL chip");
   check(await evaluate(`(() => { const c = document.querySelector(".countdown"); return c.getAttribute("role") === "timer" && parseFloat(getComputedStyle(c).fontSize) >= 28; })()`), "28 px countdown with role=timer");
   check(await evaluate(`document.querySelector("#ch-gpu").dataset.trial === "1"`), "GPU strip marked as in trial");
@@ -162,52 +242,47 @@ try {
   await sleep(700);
   check(await evaluate(`document.querySelector("#keep").getAttribute("aria-disabled") === "false"`), "Keep armed after 600 ms");
   check(await evaluate(`document.querySelectorAll(".readout [data-d]:not([hidden])").length === 6`), "every rail readout shows a delta line");
-
-  // --- energy drawer ---
   const tabHits = await evaluate(`(() => { const t = document.querySelector("#ec-tab").getBoundingClientRect();
     return [...document.querySelectorAll(".channel, .readout, .policy")].filter((e) => { const r = e.getBoundingClientRect();
       return !(r.right <= t.left || r.left >= t.right || r.bottom <= t.top || r.top >= t.bottom); }).length; })()`);
   check(tabHits === 0, "energy tab covers no channel, readout or policy box");
-  await sleep(13000); // let the class settle (10 s after Apply + 3 decode samples) so the ticket shows the trial
+  // 10 s settle + 10 after-samples, then a verdict.
+  check(await waitFor(`/better/.test(document.querySelector('.readout[data-i="0"] [data-d]').textContent)`, 26000, 250), "GPU power: a signed delta with a verdict after the settle");
+  await sleep(1200);
+  check(await evaluate(`/D/.test(document.querySelector("[data-letter]").textContent) || /C/.test(document.querySelector("[data-letter]").textContent)`), "tab shows a class letter");
+  check(await evaluate(`/−\\d+%/.test(document.querySelector("[data-tabdelta]").textContent)`), "tab shows the decode change next to the class");
   await press("e");
-  check(await evaluate(`!document.querySelector("#energy").inert && document.querySelector("#ec-tab").getAttribute("aria-expanded") === "true"`), "E opens the drawer");
-  check(await evaluate(`document.activeElement === document.querySelector("#energy-h")`), "focus moves to the drawer heading");
-  await sleep(500);
-  const left = await evaluate(`document.querySelector("#energy").getBoundingClientRect().left`);
-  check(Math.abs(left - (1440 - 340)) < 1, `drawer slides in to 1440 − 340 px (${left})`);
-  check(await evaluate(`document.querySelectorAll("#ladder li").length === 7`), "ladder has 7 rungs");
-  check(await evaluate(`document.querySelectorAll("#trade:not([hidden]) tbody tr").length === 3 || /No decode traffic/.test(document.querySelector("#t-state").textContent)`), "trade table has 3 rows (or the no-decode state)");
-  check(await evaluate(`/tok\\/s/.test(document.querySelector("#class-line").textContent) || /No decode/.test(document.querySelector("#t-state").textContent)`), "class line shows tok/s next to the class");
-  await evaluate(`window.scrollTo(0, 0)`);
-  await shot("drawer-dark.png", false);
+  await sleep(400);
+  check(await evaluate(`document.querySelectorAll("#trade:not([hidden]) tbody tr").length === 3`), "trade table has 3 rows");
+  check(await evaluate(`/D → C/.test(document.querySelector("#class-line").textContent) && /tok\\/s/.test(document.querySelector("#class-line").textContent)`), "class line: D → C with tok/s");
+  const hon = await evaluate(`document.querySelector("#honesty:not([hidden])")?.textContent || document.querySelector("#class-line").textContent`);
+  check(/^Lower class, but decode is 3\d % slower/.test(hon), `honesty line warns about the slower decode (${hon})`);
+  await shot("drawer-honesty-dark.png", false);
   await press("Escape");
   await sleep(50);
-  check(await evaluate(`document.querySelector("#energy").inert && document.querySelector("#ec-tab").getAttribute("aria-expanded") === "false"`), "Escape closes the drawer");
-  check(await evaluate(`document.activeElement === document.querySelector("#ec-tab")`), "focus returns to the tab");
+  check(await activeIs("#keep"), "after E from Keep, Escape returns focus to Keep");
   await sleep(300);
   await evaluate(`window.scrollTo(0, 0)`);
   await shot("trial-dark.png");
-
-  // --- light theme screenshots of the trial and the drawer ---
   await clickTheme("light");
   await sleep(300);
   check(await bodyBg() === "rgb(233, 235, 238)", "Light toggle gives the light chassis");
   await evaluate(`window.scrollTo(0, 0)`);
   await shot("trial-light.png");
   await evaluate(`document.querySelector("#ec-tab").click()`);
-  check(await evaluate(`document.querySelector("#ec-tab").getAttribute("aria-expanded") === "true"`), "a click on the tab opens the drawer");
   await sleep(500);
-  await shot("drawer-light.png", false);
+  await shot("drawer-honesty-light.png", false);
   await evaluate(`document.querySelector("#ec-tab").click()`);
   await sleep(300);
   await clickTheme("dark");
+  await evaluate(`clearInterval(window.__inj)`);
 
   // --- keys: K keeps, the bar shows the outcome, then goes idle ---
   await evaluate(`document.activeElement.blur()`);
   await press("k");
   check(await waitFor(`document.querySelector("#commit").dataset.mode === "outcome"`, 3000), "K keeps: outcome mode");
   check(await evaluate(`/Kept/.test(document.querySelector("#commit-text").textContent)`), "bar reports Kept");
-  check(await evaluate(`document.activeElement === document.querySelector("#commit-text")`), "focus moves to the bar text after Keep");
+  check(await activeIs("#commit-text"), "focus moves to the bar text after Keep");
   await sleep(4500);
   check(await mode() === "idle", "bar returns to idle after the outcome");
 
@@ -224,8 +299,9 @@ try {
   // --- phone ---
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
   await sleep(1500);
-  const wide = await evaluate(`[...document.querySelectorAll("body *")].filter((e) => e.getBoundingClientRect().right > 391 && !e.closest(".scroll, .profile-row, .ec")).slice(0, 6).map((e) => e.tagName + "." + e.className + "#" + e.id + " " + Math.round(e.getBoundingClientRect().right)).join(", ")`);
+  const wide = await evaluate(`[...document.querySelectorAll("body *")].filter((e) => e.getBoundingClientRect().right > 391 && !e.closest(".scroll, .ec")).slice(0, 6).map((e) => e.tagName + "." + e.className + "#" + e.id + " " + Math.round(e.getBoundingClientRect().right)).join(", ")`);
   check(await evaluate(`document.documentElement.scrollWidth <= 390`), `no horizontal overflow at 390 px${wide ? " (wide: " + wide + ")" : ""}`);
+  check(await evaluate(`[...document.querySelectorAll("#profiles .pf-btn, #save-profile")].every((b) => { const r = b.getBoundingClientRect(); return r.left >= 0 && r.right <= 390 && b.scrollWidth <= b.clientWidth + 1; })`), "phone: every profile and Save staged as… fully visible");
   check(await evaluate(`(() => { const r = document.querySelector("#ec-tab").getBoundingClientRect(); return r.left >= 0 && r.right <= 390 && r.top >= 0 && r.bottom <= 844 && r.height >= 44; })()`), "energy pill visible inside the viewport");
   await evaluate(`window.scrollTo(0, 0)`);
   await shot("mobile-top-dark.png", false);
@@ -241,18 +317,33 @@ try {
   check(await evaluate(`document.documentElement.scrollWidth <= 390 && innerWidth === 390`), "phone: no horizontal overflow in a trial");
   await evaluate(`window.scrollTo(0, 0)`);
   await shot("mobile-trial-dark.png", false);
+  await clickTheme("light");
+  await sleep(300);
+  await shot("mobile-trial-light.png", false);
+  await clickTheme("dark");
+  await sleep(300);
   await evaluate(`document.querySelector("#ec-tab").click()`);
   await sleep(500);
   const sheet = await evaluate(`(() => { const s = document.querySelector("#energy").getBoundingClientRect(), c = document.querySelector("#commit").getBoundingClientRect();
     const hit = (sel) => { const r = document.querySelector(sel).getBoundingClientRect();
       return r.left >= 0 && r.right <= innerWidth && document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest(sel) != null; };
-    return { below: s.top >= c.bottom - 0.5, keep: hit("#keep"), revert: hit("#revert") }; })()`);
+    const gap = (c.bottom + s.top) / 2;
+    return { below: s.top >= c.bottom - 0.5, keep: hit("#keep"), revert: hit("#revert"), inert: document.querySelector("#main").inert && document.querySelector("#ec-tab").inert,
+      scrim: s.top - c.bottom > 4 ? document.elementFromPoint(195, gap)?.id : "ec-scrim", gap }; })()`);
   check(sheet.below, "phone: the sheet stays below the commit bar");
   check(sheet.keep && sheet.revert, "phone: Keep and Revert stay tappable with the sheet open");
-  await shot("mobile-sheet-dark.png", false);
+  check(sheet.inert, "phone: the page behind the sheet is inert (modal)");
+  check(sheet.scrim === "ec-scrim", `phone: a scrim covers the page above the sheet (${sheet.scrim})`);
   await shot("mobile-drawer-dark.png", false);
-  await evaluate(`document.querySelector("#ec-close").click()`);
-  await sleep(1000);
+  await evaluate(`document.querySelector("#ec-scrim").click()`);
+  await sleep(400);
+  check(!(await isOpen()) && await evaluate(`!document.querySelector("#main").inert`), "phone: a tap on the scrim closes the sheet and frees the page");
+  await evaluate(`document.querySelector("#ec-tab").click()`);
+  await sleep(400);
+  await evaluate(`document.querySelector("#keep").focus()`);
+  await press("Escape");
+  await sleep(400);
+  check(!(await isOpen()), "phone: Escape closes the sheet with focus on the commit bar");
   await evaluate(`document.querySelector("#revert").click()`);
   check(await waitFor(`document.querySelector("#commit").dataset.mode !== "trial"`, 3000), "phone: Revert now ends the trial");
 

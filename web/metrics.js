@@ -4,7 +4,9 @@
 export const LETTERS = "ABCDEFG";
 export const SETTLE_S = 10;   // after Apply, ignore this long while clocks settle
 export const WINDOW_S = 30;   // before-window and class median window
-export const MIN_N = 3;       // fewer samples than this: no verdict
+export const MIN_N = 3;       // fewer samples than this: no baseline, no class
+export const MIN_AFTER = 10;  // after-window samples before a trial verdict (fewer: "measuring")
+const ANY = Number.MIN_VALUE; // decode gate for "any decode at all" (tok/s > 0)
 export const SCALE_DEFAULT = Object.freeze({ a: 0.25, r: 1.41, min: 5 });
 
 /* Per-metric noise floor and direction: -1 lower is better, +1 higher is better, 0 neutral. */
@@ -22,7 +24,8 @@ export function mad(a) {
   return m == null ? null : median(a.map((x) => Math.abs(x - m)));
 }
 
-/* The server sends no start time; it is a pure function of the countdown, so a reload gives the same baseline. */
+/* The server sends no start time; it is a function of the countdown. remaining_s is whole seconds from another
+   clock read than snap.t, so the start is exact to ±1 s (a reload can move it by one sample). */
 export const trialStart = (snap, trial) => snap.t - (trial.total_s - trial.remaining_s);
 
 /* Values of `key` with from <= t < to (or t <= to when `incl`). With `gate`, only samples where decode >= gate. */
@@ -40,27 +43,46 @@ export function windowSamples(H, key, from, to, gate = null, incl = false) {
   return out;
 }
 
-/* Median change with a noise judgement: noise = max(2 MAD, 2 % of baseline, floor). */
+/* Lag-1 autocorrelation (bias-corrected), clamped to [0, 0.9]. Power under load drifts, so neighbouring samples are not independent. */
+function rho1(a) {
+  const m = a.reduce((x, y) => x + y, 0) / a.length;
+  let num = 0, den = 0;
+  for (let i = 0; i < a.length; i++) { den += (a[i] - m) ** 2; if (i) num += (a[i] - m) * (a[i - 1] - m); }
+  const r = den ? num / den : 0;
+  return Math.min(0.9, Math.max(0, r + (1 + 4 * r) / a.length)); // + the small-sample bias of the estimate
+}
+/* Median change with a noise judgement. Noise is the largest of: 2 MAD of the baseline; the uncertainty of a
+   difference of two medians, 2.5 × 1.4826 MAD × sqrt(f (1/nb + 1/na)) with f = (1 + rho) / (1 − rho) for
+   correlated samples, so small or drifting windows need a larger change; 2 % of the baseline; a per-metric floor. */
 export function delta(key, before, after) {
   if (before.length < MIN_N || after.length < MIN_N) return null;
-  const mb = median(before), ma = median(after), d = ma - mb;
-  const noise = Math.max(2 * mad(before), 0.02 * Math.abs(mb), FLOOR[key] ?? 0);
+  const mb = median(before), ma = median(after), d = ma - mb, m = mad(before), r = rho1(before);
+  const se = 2.5 * 1.4826 * m * Math.sqrt(((1 + r) / (1 - r)) * (1 / before.length + 1 / after.length));
+  const noise = Math.max(2 * m, se, 0.02 * Math.abs(mb), FLOOR[key] ?? 0);
   const better = BETTER[key] ?? 0;
   let verdict = "within noise";
   if (Math.abs(d) > noise) verdict = better === 0 ? (d > 0 ? "higher" : "lower") : d * better > 0 ? "better" : "worse";
   return { key, d, noise, verdict, pct: mb ? (100 * d) / Math.abs(mb) : null, before: mb, after: ma };
 }
 
-/* Evidence for one metric during a trial: measuring, no decode traffic, or a delta. */
+/* Evidence for one metric during a trial: measuring, no decode traffic, decode below the minimum, or a delta.
+   The decode minimum only picks the baseline. After the start, tok/s and W keep every sample with any decode,
+   so a trial that slows decode below the minimum shows as slower, not as "no traffic". */
 export function trialDelta(H, key, started, now, scale = SCALE_DEFAULT) {
-  if (now < started + SETTLE_S) return { state: "measuring", wait: Math.ceil(started + SETTLE_S - now) };
-  let gate = DECODE.has(key) ? scale.min : null;
-  if (key === "gpu.power_w" && windowSamples(H, "llm.tok_s", started - WINDOW_S, started, scale.min).length >= MIN_N) gate = scale.min;
-  const before = windowSamples(H, key, started - WINDOW_S, started, gate);
-  const after = windowSamples(H, key, started + SETTLE_S, now, gate, true);
-  const d = delta(key, before, after);
+  const ready = started + SETTLE_S + MIN_AFTER;
+  if (now < started + SETTLE_S) return { state: "measuring", wait: Math.ceil(ready - now) };
+  const decoding = windowSamples(H, "llm.tok_s", started - WINDOW_S, started, scale.min).length >= MIN_N;
+  const gated = DECODE.has(key) || (key === "gpu.power_w" && decoding);
+  const before = windowSamples(H, key, started - WINDOW_S, started, gated ? scale.min : null);
+  const gateAfter = !gated ? null : key === "llm.j_per_tok" ? scale.min : ANY;
+  const after = windowSamples(H, key, started + SETTLE_S, now, gateAfter, true);
+  const d = after.length >= MIN_AFTER && delta(key, before, after);
   if (d) return { state: "ok", ...d };
-  return gate != null ? { state: "no-decode" } : { state: "measuring", wait: 0 };
+  if (now < ready) return { state: "measuring", wait: Math.ceil(ready - now) };
+  if (!gated) return { state: "measuring", wait: 0 };
+  if (key === "llm.j_per_tok" && before.length >= MIN_N
+    && windowSamples(H, "llm.tok_s", started + SETTLE_S, now, ANY, true).length >= MIN_AFTER) return { state: "below-min", min: scale.min };
+  return { state: "no-decode" };
 }
 
 /* Energy classes: log-spaced edges, A below edges[0], G at edges[5] or more. */
@@ -89,29 +111,47 @@ export function classNow(H, now, scale = SCALE_DEFAULT) {
   const c = jClass(H, now - WINDOW_S, now, { ...scale }, true);
   return c ? { state: "ok", ...c } : { state: "idle" };
 }
-/* During a trial: the class before (30 s up to the start) and now (from start + 10 s). */
+/* During a trial: the class before (30 s up to the start) and now (from start + 10 s).
+   "below-min": decode goes on after the start, but below the minimum, so there is no class. */
 export function classTrial(H, started, now, scale = SCALE_DEFAULT) {
   const before = jClass(H, started - WINDOW_S, started, scale, false);
   if (now < started + SETTLE_S) return { state: "settling", before, now: null, wait: Math.ceil(started + SETTLE_S - now) };
   const after = jClass(H, started + SETTLE_S, now, scale, true);
-  return after ? { state: "ok", before, now: after, wait: 0 } : { state: "settling", before, now: null, wait: 0 };
+  if (after) return { state: "ok", before, now: after, wait: 0 };
+  const below = before && windowSamples(H, "llm.tok_s", started + SETTLE_S, now, ANY, true).length >= MIN_N;
+  return { state: below ? "below-min" : "settling", before, now: null, wait: 0 };
 }
 
-/* A better class must not hide a slower decode (and the mirror case). */
-export function honesty(beforeK, nowK, tok) {
-  if (beforeK == null || nowK == null || !tok || tok.pct == null) return null;
+/* A better class must not hide a slower decode (and the mirror case). belowMin: the trial has no class
+   because decode fell below the minimum. */
+export function honesty(beforeK, nowK, tok, belowMin = null) {
+  if (!tok || tok.pct == null) return null;
   const p = Math.round(Math.abs(tok.pct));
+  if (belowMin != null && tok.verdict === "worse") return `No class: decode is ${p} % slower, below ${belowMin} tok/s.`;
+  if (beforeK == null || nowK == null) return null;
   if (nowK < beforeK && tok.verdict === "worse") return `Lower class, but decode is ${p} % slower.`;
   if (nowK > beforeK && tok.verdict === "better") return `Higher class, but decode is ${p} % faster.`;
   return null;
 }
 
+/* A usable scale: finite, a > 0, r > 1, min >= 0, and the top edge (a × r^5) still finite. */
+export const validScale = (a, r, min) => a > 0 && r > 1 && min >= 0 && Number.isFinite(a + r + min) && Number.isFinite(a * r ** 5);
 /* Stored scale (localStorage string). Anything invalid falls back to the defaults. */
 export function loadScale(raw) {
   try {
     const v = JSON.parse(raw);
     const a = Number(v?.a), r = Number(v?.r), min = Number(v?.min);
-    if (a > 0 && r > 1 && min >= 0 && Number.isFinite(a + r + min)) return { a, r, min };
+    if (validScale(a, r, min)) return { a, r, min };
   } catch { /* fall through */ }
   return { ...SCALE_DEFAULT };
+}
+
+/* How a trial ended, from the server's event log (newest last). Keep after reboot logs "kept" (persist false)
+   and then "persisted" or "persist_failed". boot: "saved" | "failed" | null. */
+export function trialOutcome(events) {
+  const i = events.findLastIndex((e) => e.kind === "kept" || e.kind === "reverted" || e.kind === "trial_dropped_by_reboot");
+  const ev = events[i];
+  if (ev?.kind !== "kept") return { kind: "reverted", ev, boot: null };
+  const next = events.slice(i + 1).find((e) => e.kind === "persisted" || e.kind === "persist_failed");
+  return { kind: "kept", ev, boot: next ? (next.kind === "persisted" ? "saved" : "failed") : null };
 }

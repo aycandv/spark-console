@@ -1,6 +1,6 @@
 /* spark-console client (ES module). One SSE stream drives everything; controls stage values,
    Apply opens a trial on the server, Keep / Revert close it. Nodes are built once and patched per tick. */
-import { trialStart, trialDelta, classNow, classTrial, honesty, loadScale, SETTLE_S } from "./metrics.js";
+import { trialStart, trialDelta, classNow, classTrial, honesty, loadScale, trialOutcome, SETTLE_S } from "./metrics.js";
 import { initEnergy } from "./energy.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -15,13 +15,19 @@ const signed = (v, d = 0) => {
   const r = Math.round(v * 10 ** d) / 10 ** d; // sign of the shown value, so no "−0.0"
   return (r > 0 ? "+" : r < 0 ? "−" : "±") + fmt(Math.abs(r), d);
 };
-const clock = (t) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(t * 1000));
+const TF = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const clock = (t) => TF.format(new Date(t * 1000));
 const mmss = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const setHTML = (el, html) => { if (el._h !== html) { el.innerHTML = html; el._h = html; } };
 const setText = (el, text) => { if (el.textContent !== text) el.textContent = text; };
 const reduced = matchMedia("(prefers-reduced-motion: reduce)");
 const darkMQ = matchMedia("(prefers-color-scheme: dark)");
+/* Snap to where the server says we are, then glide linearly to the next second (WAAPI: no forced layout). */
+function glide(el, prop, from, to) {
+  el._glide?.cancel();
+  el._glide = el.animate([{ [prop]: from }, { [prop]: reduced.matches ? from : to }], { duration: 1000, easing: "linear", fill: "forwards" });
+}
 const store = {
   get: (k, d = null) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
@@ -90,7 +96,7 @@ const resolvedTheme = () => {
 };
 function refreshColors() {
   if (!probe) { probe = document.createElement("span"); probe.hidden = true; document.body.append(probe); }
-  for (const [k, v] of Object.entries({ ink: "--ink", ink2: "--ink-2", ink3: "--ink-3", amber: "--amber-edge", well: "--well" })) {
+  for (const [k, v] of Object.entries({ ink: "--ink", ink2: "--ink-2", ink3: "--ink-3", amber: "--amber-edge", amberText: "--amber-text", well: "--well" })) {
     probe.style.color = `var(${v})`;
     C[k] = getComputedStyle(probe).color;
   }
@@ -136,7 +142,7 @@ function drawOverlay(u, chart) {
     const x = Math.round(u.valToPos(S.trialStarted, "x", true)) + 0.5;
     if (x >= left && x <= left + width) {
       ctx.strokeStyle = C.amber;
-      ctx.lineWidth = px;
+      ctx.lineWidth = 2 * px;
       ctx.setLineDash([]);
       ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + height); ctx.stroke();
     }
@@ -164,7 +170,7 @@ function drawOverlay(u, chart) {
     if (v != null) {
       const y = u.valToPos(v, "y", true);
       const above = y - top > 18 * px;
-      label(`${chart.capWord} ${fmt(v)}`, left + width - 5 * px, above ? y - 2 * px : y + 2 * px, "right", above ? "bottom" : "top", knobInTrial(chart.knob) ? C.amber : C.ink3);
+      label(`${chart.capWord} ${fmt(v)}`, left + width - 5 * px, above ? y - 2 * px : y + 2 * px, "right", above ? "bottom" : "top", knobInTrial(chart.knob) ? C.amberText : C.ink3);
     }
   }
   ctx.restore();
@@ -225,10 +231,15 @@ function labelTraces() {
 
 /* --- network ------------------------------------------------------------------------------------------------------------ */
 const BUSY = { apply: ["#apply", "Applying…"], keep: ["#keep", "Keeping…"], "keep-boot": ["#keep-boot", "Keeping…"], revert: ["#revert", "Reverting…"] };
+/* The machine state after a failure differs per action, so the copy does too. */
 function errorText(e, action) {
   if (e.status === 409 && action === "apply") return "A trial is already open: Keep or Revert it first.";
-  if (e.status === 502) return `The helper failed: ${e.message.replace(/^helper failed: /, "")}. The old values are still set.`;
-  return `Failed: ${e.message}`;
+  if (e.status !== 502) return `Failed: ${e.message}`;
+  const why = e.message.replace(/^helper failed: /, "");
+  if (action === "apply") return `The helper failed: ${why}. The old values are still set.`;
+  if (action === "keep-boot") return `Kept until reboot; saving for boot failed: ${why}.`;
+  if (action === "revert") return `Revert failed: ${why}. The trial values are still set; the server retries.`;
+  return `The helper failed: ${why}.`;
 }
 async function post(path, body = {}, action = path) {
   S.busy = action;
@@ -245,6 +256,7 @@ async function post(path, body = {}, action = path) {
     return data;
   } catch (e) {
     S.error = errorText(e, action);
+    S.errorAction = action;
     throw e;
   } finally {
     S.busy = null;
@@ -269,6 +281,8 @@ function connect() {
 }
 
 function ingest(st) {
+  // Simulate mode only: a handle for scripts/ui_smoke.mjs to feed synthetic decode samples.
+  if (st.control?.simulate && !window.__sc) window.__sc = { H, S, render };
   S.snap = st.snapshot;
   S.control = st.control;
   S.profiles = st.profiles;
@@ -304,9 +318,10 @@ function trackTrial() {
   } else if (!key && S.trialKey) {
     S.trialKey = null;
     S.trialStarted = null;
-    const ev = (S.control?.events || []).slice().reverse().find((e) => e.kind === "kept" || e.kind === "reverted" || e.kind === "trial_dropped_by_reboot");
-    S.outcome = { kind: ev?.kind === "kept" ? "kept" : "reverted", ev, until: Date.now() + 4000, evidence: S.lastEvidence };
+    S.outcome = { ...trialOutcome(S.control?.events || []), until: Date.now() + 4000, evidence: S.lastEvidence };
     announce(outcomeText());
+    // Ended by the timeout or elsewhere: the Keep/Revert row is about to hide, so do not lose focus with it.
+    if ($("#commit-trial").contains(document.activeElement)) queueMicrotask(() => $("#commit-text").focus({ preventScroll: true }));
     setTimeout(() => render(false), 4050);
   }
   const now = H.t[H.t.length - 1];
@@ -326,7 +341,7 @@ function outcomeText() {
   if (!o) return "";
   const e = o.ev || {};
   let head;
-  if (o.kind === "kept") head = e.persist ? "Kept and saved for boot" : "Kept until reboot";
+  if (o.kind === "kept") head = o.boot === "saved" ? "Kept and saved for boot" : o.boot === "failed" ? "Kept until reboot · saving for boot failed" : "Kept until reboot";
   else if (e.kind === "trial_dropped_by_reboot") head = "Trial ended by a reboot";
   else head = e.why === "timeout" ? "Reverted: not kept in time" : e.why === "user" ? "Reverted" : `Reverted (${e.why || "ended"})`;
   const words = evidenceWords(o.evidence);
@@ -377,15 +392,6 @@ const isDis = (b) => b.getAttribute("aria-disabled") === "true";
 const setDis = (b, v) => b.setAttribute("aria-disabled", String(!!v));
 const trialArmed = () => performance.now() >= S.armedAt;
 
-function glide(el, prop, from, to, transition) {
-  el.style.transition = "none";
-  el.style[prop] = from;
-  el.getBoundingClientRect();
-  if (reduced.matches) return;
-  el.style.transition = transition;
-  el.style[prop] = to;
-}
-
 function renderCommit() {
   const bar = $("#commit"), c = S.control || {}, t = c.trial;
   const nStaged = Object.keys(S.staged).length;
@@ -406,21 +412,21 @@ function renderCommit() {
     ev = t.revert_error ? "" : evidenceCompact(S.ev);
     setText($("#countdown"), mmss(t.remaining_s));
     const urgent = t.remaining_s <= 10;
-    setText($("#countdown-l"), urgent ? "Reverting in" : "to revert");
-    $("#countdown-l").style.order = urgent ? "1" : "2";
-    $("#countdown").style.order = urgent ? "2" : "1";
+    // DOM order is the reading order: "Reverting in 0:09" or "1:00 to revert".
+    $("#countdown-pre").hidden = !urgent;
+    $("#countdown-l").hidden = urgent;
     if (urgent && !S.warned) { S.warned = true; announce("Trial: 10 seconds left. Keep, or the old values return."); }
     if (S.lastRemaining !== t.remaining_s) {
       S.lastRemaining = t.remaining_s;
       const f = (r) => `scaleX(${Math.max(0, r) / (t.total_s || 1)})`;
-      glide($("#drain"), "transform", f(t.remaining_s), f(t.remaining_s - 1), "transform 1s linear");
+      glide($("#drain"), "transform", f(t.remaining_s), f(t.remaining_s - 1));
     }
   } else if (nStaged) {
     html = (S.stagedProfile ? `<span class="chg-prefix">Profile ${esc(S.stagedProfile)} staged ·</span>` : "")
       + Object.entries(S.staged).map(([k, v]) => chgHTML(k, c.current?.[k], v)).join("");
   } else if (mode === "outcome") {
     html = esc(outcomeText());
-  } else if (mode === "failed") {
+  } else if (mode === "failed" && S.errorAction === "apply") {
     html = "Nothing changed.";
   } else {
     const last = (c.events || []).at(-1);
@@ -442,7 +448,8 @@ function renderCommit() {
   setDis($("#revert"), !armed || S.busy);
   for (const [action, [sel, busyText]] of Object.entries(BUSY)) {
     const b = $(sel);
-    if (!b.style.minWidth && b.offsetWidth) b.style.minWidth = `${b.offsetWidth}px`;
+    // Measure once, when the button is first visible (hidden ones would force a layout on every tick).
+    if (!b.style.minWidth && !b.closest("[hidden]") && b.offsetWidth) b.style.minWidth = `${b.offsetWidth}px`;
     const lab = $("[data-label]", b);
     lab.dataset.idle ??= lab.textContent;
     setText(lab, S.busyLabel && S.busy === action ? busyText : lab.dataset.idle);
@@ -456,7 +463,7 @@ function renderCommit() {
 function eventText(e) {
   switch (e.kind) {
     case "applied": return `Trial started: ${changeList(e.applied)}`;
-    case "reverted": return `Reverted (${e.why === "timeout" ? "not kept in time" : e.why}): ${changeList(e.values)}`;
+    case "reverted": return `Reverted${e.why === "timeout" ? " (not kept in time)" : e.why === "user" ? "" : ` (${e.why})`}: ${changeList(e.values)}`;
     case "kept": return `Kept${e.persist ? " after reboot" : " until reboot"}: ${changeList(e.values)}`;
     case "persisted": return `Saved for boot: ${[e.gpu && "GPU", e.cpu && "CPU"].filter(Boolean).join(" + ")}`;
     case "failed": return `Failed: ${e.error}`;
@@ -675,6 +682,7 @@ function deltaLine(r, d) {
   if (!d) return null;
   if (d.state === "measuring") return { v: "wait", html: `measuring… ${d.wait} s` };
   if (d.state === "no-decode") return { v: "wait", html: "no decode traffic" };
+  if (d.state === "below-min") return { v: "wait", html: `no class: decode below ${fmt(d.min)} tok/s` };
   const pct = r.key === "llm.tok_s" && d.verdict !== "within noise" && d.pct != null ? ` (${signed(d.pct, 0)} %)` : "";
   const dot = d.verdict === "better" || d.verdict === "worse" ? `<span class="vdot" data-v="${d.verdict}"></span>` : "";
   const sr = `${r.label} ${fmt(Math.abs(d.d), r.d)} ${r.word} ${d.d < 0 ? "lower" : "higher"} than before the trial, ${d.verdict}.`;
@@ -838,9 +846,10 @@ function energyView() {
     v.deltas = S.ev ? { j: S.ev["llm.j_per_tok"], tok: S.ev["llm.tok_s"], w: S.ev["gpu.power_w"] } : null;
     if (t.revert_error) v.state = "hold";
     else if (ct.state === "ok") v.state = ct.before ? "trial" : "ok";
+    else if (ct.state === "below-min") v.state = "below";
     else if (!ct.before && now >= S.trialStarted + SETTLE_S) v.state = "idle";
     else v.state = "settling";
-    v.honesty = v.deltas?.tok?.state === "ok" ? honesty(ct.before?.k, ct.now?.k, v.deltas.tok) : null;
+    v.honesty = v.deltas?.tok?.state === "ok" ? honesty(ct.before?.k, ct.now?.k, v.deltas.tok, v.state === "below" ? S.scale.min : null) : null;
   } else {
     const cn = classNow(H, now, S.scale);
     v.state = cn.state;
@@ -877,7 +886,8 @@ function render(tick = true) {
   if (tick) {
     renderDetails();
     redrawCharts();
-    if (!S.labelled) { S.labelled = true; labelTraces(); }
+    // Trace ranges move with the clocks; the labels only set attributes, so every 10 s is enough.
+    if (!(S.labelledAt > Date.now() - 10000)) { S.labelledAt = Date.now(); labelTraces(); }
   }
 }
 
@@ -914,13 +924,13 @@ function setKeys(on) {
 }
 function onKey(e) {
   if (e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
-  if (e.target.closest?.("input, select, textarea, [contenteditable]")) return;
   if ($("dialog[open]")) return;
+  // Escape closes the drawer wherever focus is (a field keeps its own Escape only when the drawer is shut).
   if (e.key === "Escape") {
-    const a = document.activeElement;
-    if (energy.isOpen() && (energy.contains(a) || a === document.body || !a)) { e.preventDefault(); energy.close(); }
+    if (energy.isOpen()) { e.preventDefault(); energy.close(); }
     return;
   }
+  if (e.target.closest?.("input, select, textarea, [contenteditable]")) return;
   if (!S.keys) return;
   const k = e.key.toLowerCase();
   const act = { e: () => energy.toggle(), a: doApply, k: () => doKeep(false), b: () => doKeep(true), r: doRevert }[k];
@@ -948,7 +958,12 @@ function bind() {
   });
   $("#governor").addEventListener("change", (e) => stage("governor", e.target.value));
   $("#apply").addEventListener("click", doApply);
-  $("#discard").addEventListener("click", () => { if (isDis($("#discard"))) return; S.staged = {}; S.stagedProfile = null; S.error = ""; S.clamp = null; render(false); });
+  $("#discard").addEventListener("click", () => {
+    if (isDis($("#discard"))) return;
+    S.staged = {}; S.stagedProfile = null; S.error = ""; S.clamp = null;
+    render(false);
+    $("#commit-text").focus({ preventScroll: true }); // Discard hides itself
+  });
   $("#keep").addEventListener("click", () => doKeep(false));
   $("#keep-boot").addEventListener("click", () => doKeep(true));
   $("#revert").addEventListener("click", doRevert);
@@ -1023,7 +1038,7 @@ async function start() {
   renderLinks();
   buildPolicy();
   energy = initEnergy({
-    fmt, signed, announce, store, reduced,
+    fmt, signed, announce, reduced, glide,
     onScale: (scale) => { S.scale = scale; store.set("sc-energy-scale", JSON.stringify(scale)); render(false); },
   });
   energy.init(S.scale);

@@ -1,6 +1,6 @@
 /* Energy class drawer: the tab (a pill on a phone), the paper ticket, its burn frame, and the scale dialog.
    app.js computes the view (metrics.js); this module only draws it and handles open/close. */
-import { LETTERS, bandText, SCALE_DEFAULT } from "./metrics.js";
+import { LETTERS, bandText, SCALE_DEFAULT, validScale } from "./metrics.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -8,15 +8,15 @@ const setText = (el, t) => { if (el.textContent !== t) el.textContent = t; };
 const setHTML = (el, h) => { if (el._h !== h) { el.innerHTML = h; el._h = h; } };
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
-  const tab = $("#ec-tab"), aside = $("#energy"), ticket = $("#ticket");
+export function initEnergy({ fmt, signed, announce, reduced, glide, onScale }) {
+  const tab = $("#ec-tab"), aside = $("#energy"), ticket = $("#ticket"), main = $("#main");
   const phone = matchMedia("(max-width: 720px)");
   const edge = document.createElement("span");
   edge.className = "ec-edge";
   edge.setAttribute("aria-hidden", "true");
   tab.append(edge);
   let scale = { ...SCALE_DEFAULT };
-  let lastClosed = 0, enterT, animT;
+  let lastClosed = 0, enterT, animT, from = null;
   let settledKey = null, lastAnnounce = 0, lastRemaining = null, lastLetter = null, lastView = null;
 
   /* --- ladder ------------------------------------------------------------------------------------------- */
@@ -33,15 +33,6 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
     if (reduced.matches || isOpen() || phone.matches) return;
     tab.animate([{ translate: "0 0" }, { translate: "-8px 0", offset: 0.45 }, { translate: "0 0" }], { duration: 440, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
   };
-  /* Snap to where the server says we are, then glide linearly to the next second. */
-  function glide(el, prop, from, to) {
-    el.style.transition = "none";
-    el.style[prop] = from;
-    el.getBoundingClientRect();
-    if (reduced.matches) return;
-    el.style.transition = `${prop === "strokeDashoffset" ? "stroke-dashoffset" : "transform"} 1s linear`;
-    el.style[prop] = to;
-  }
 
   /* --- render ---------------------------------------------------------------------------------------------- */
   function decodeWords(tok) {
@@ -64,10 +55,10 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
     const dw = decodeWords(tok);
 
     // tab / pill
-    const showK = st === "ok" || st === "trial" ? nowK : st === "settling" ? beforeK : null;
+    const showK = st === "ok" || st === "trial" ? nowK : st === "settling" || st === "below" ? beforeK : null;
     const sw = $(".ec-sw", tab), letter = $("[data-letter]", tab);
     sw.dataset.k = showK ?? "";
-    sw.dataset.dim = st === "settling" && showK != null ? "1" : "0";
+    sw.dataset.dim = (st === "settling" || st === "below") && showK != null ? "1" : "0";
     const L = showK == null ? "–" : LETTERS[showK];
     if (letter.textContent !== L) {
       letter.textContent = L;
@@ -77,7 +68,9 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
     const td = $("[data-tabdelta]", tab);
     setText(td, dw ? dw.short : "");
     td.dataset.noise = dw?.noise ? "1" : "0";
-    setText($("[data-tabname]", tab), `Energy class ${showK == null ? "not measured" : L}${dw ? `, ${dw.sr}` : ""}`);
+    const name = `Energy class ${showK == null ? "not measured" : L}${dw ? `, ${dw.sr}` : ""}`;
+    setText($("[data-tabname]", tab), name);
+    if (tab.title !== name) tab.title = name;
     setText($("[data-pill]", tab), inTrial && dw ? dw.pill : "Energy class");
     tab.dataset.trial = inTrial ? "1" : "0";
 
@@ -92,10 +85,10 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
         glide(run, "strokeDashoffset", at(r), at(r - 1));
       }
       ticket.dataset.frame = st === "hold" ? "hold" : r <= 10 ? "urgent" : "trial";
-    } else {
+    } else if (lastRemaining != null) {
       lastRemaining = null;
-      run.style.transition = "none";
-      run.style.strokeDashoffset = "0";
+      edge._glide?.cancel();
+      run._glide?.cancel();
       ticket.dataset.frame = "static";
     }
 
@@ -126,7 +119,11 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
     // class line, state line, trade table, honesty line
     let line, state = "";
     if (st === "hold") { line = "Class on hold"; state = "The class is on hold until the revert succeeds."; }
-    else if (st === "idle") { line = `No class · ${fmt(v.tokNow, 1)} tok/s`; state = `No decode traffic: the class needs tok/s above ${fmt(scale.min)}.`; }
+    else if (st === "idle") { line = `No class · ${fmt(v.tokNow, 1)} tok/s`; state = `No decode traffic: the class needs ${fmt(scale.min)} tok/s or more.`; }
+    else if (st === "below") {
+      line = [`Was ${LETTERS[beforeK]} → no class`, part(v.deltas?.w, "W", 1), dw ? dw.pill : `now ${fmt(v.tokNow, 1)} tok/s`].filter(Boolean).join(" · ");
+      state = `Decode is below ${fmt(scale.min)} tok/s, so there is no class.`;
+    }
     else if (st === "settling") {
       line = `${beforeK != null ? `Was ${LETTERS[beforeK]} · ${fmt(v.before.median, 2)} J/token` : "Measuring"} · now ${fmt(v.tokNow, 1)} tok/s`;
       state = v.wait > 0 ? `Measuring the new values… ${v.wait} s` : "Measuring the new values… waiting for decode samples.";
@@ -141,12 +138,12 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
     setHTML($("#class-line"), line);
     setText($("#t-state"), state);
     const trade = $("#trade");
-    trade.hidden = !(inTrial && v.deltas && (st === "trial" || st === "settling"));
+    trade.hidden = !(inTrial && v.deltas && (st === "trial" || st === "settling" || st === "below"));
     if (!trade.hidden) {
       const rows = [["Energy", "J/tok", 2, v.deltas.j], ["Decode", "tok/s", 1, tok], ["GPU", "W", 1, v.deltas.w]];
       setHTML($("tbody", trade), rows.map(([name, unit, d, x]) => {
         if (!x || x.state !== "ok") {
-          const word = x?.state === "no-decode" ? "no decode" : "measuring";
+          const word = x?.state === "no-decode" ? "no decode" : x?.state === "below-min" ? "below min" : "measuring";
           return `<tr><th scope="row">${name}<small>${unit}</small></th><td class="num">–</td><td class="num">–</td><td data-v="${word}">${word}</td></tr>`;
         }
         const dot = x.verdict === "better" || x.verdict === "worse" ? `<span class="vdot" data-v="${x.verdict}"></span>` : "";
@@ -178,20 +175,26 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
     clearTimeout(animT);
     animT = setTimeout(() => aside.removeAttribute("data-animating"), 340);
   }
-  function open({ focus = true, quick = false } = {}) {
+  /* On a phone the sheet covers the page: it is modal (page inert, scrim). The commit bar is outside <main>,
+     so Keep and Revert stay live. On a desktop the page makes room for the drawer (CSS), so it is not modal. */
+  const setModal = (on) => { main.inert = on; tab.inert = on; };
+  phone.addEventListener("change", () => setModal(isOpen() && phone.matches));
+  function open({ focus = true } = {}) {
     if (isOpen()) return;
+    const a = document.activeElement;
+    from = a && a !== document.body && !aside.contains(a) ? a : null;
     aside.style.transform = "";
     aside.inert = false;
     markAnimating();
-    if (!quick && !reduced.matches && Date.now() - lastClosed > 10000) {
+    if (!reduced.matches && Date.now() - lastClosed > 10000) {
       aside.setAttribute("data-entering", "");
       clearTimeout(enterT);
-      enterT = setTimeout(() => aside.removeAttribute("data-entering"), 620);
+      enterT = setTimeout(() => aside.removeAttribute("data-entering"), 320);
     }
     aside.setAttribute("data-open", "");
     tab.setAttribute("aria-expanded", "true");
+    setModal(phone.matches);
     if (focus) $("#energy-h").focus({ preventScroll: true });
-    if (!phone.matches) store.set("sc-energy-open", "1");
   }
   function close() {
     if (!isOpen()) return;
@@ -203,13 +206,16 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
     aside.style.transform = "";
     tab.setAttribute("aria-expanded", "false");
     lastClosed = Date.now();
-    if (hadFocus) tab.focus({ preventScroll: true });
-    if (!phone.matches) store.set("sc-energy-open", "0");
+    setModal(false);
+    // Back to where the user was (the tab, or the control they pressed E on).
+    if (hadFocus) (from?.isConnected && !from.closest("[inert], [hidden]") ? from : tab).focus({ preventScroll: true });
+    from = null;
   }
   const toggle = () => (isOpen() ? close() : open());
   aside.addEventListener("transitionend", (e) => { if (e.target === aside && e.propertyName === "transform") aside.removeAttribute("data-animating"); });
   tab.addEventListener("click", toggle);
   $("#ec-close").addEventListener("click", close);
+  $("#ec-scrim").addEventListener("click", close);
 
   /* --- phone: drag the sheet down to dismiss ------------------------------------------------------------------------------ */
   let drag = null;
@@ -230,7 +236,8 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
     drag = null;
     const v = dy / Math.max(1, performance.now() - t);
     aside.style.transition = "";
-    if (dy > 0.25 * h || v > 0.11) close();
+    const tapGrab = e.type === "pointerup" && dy < 4 && e.target.closest?.(".ec-grab"); // a tap on the handle closes too
+    if (tapGrab || dy > 0.25 * h || v > 0.11) close();
     else {
       aside.style.transition = "transform 200ms cubic-bezier(0.23, 1, 0.32, 1)";
       aside.style.transform = "";
@@ -242,11 +249,24 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
 
   /* --- scale dialog ------------------------------------------------------------------------------------------------------- */
   const dlg = $("#scale-dialog"), fa = $("#sc-a"), fr = $("#sc-r"), fm = $("#sc-min");
-  const valid = () => Number(fa.value) > 0 && Number(fr.value) > 1 && Number(fm.value) >= 0 && fm.value !== "";
+  // Same rule as a stored scale (metrics.js), per field so the bad one can be marked.
+  const bad = () => {
+    const a = Number(fa.value), r = Number(fr.value), m = Number(fm.value);
+    const out = [];
+    if (fa.value === "" || !(a > 0 && Number.isFinite(a))) out.push(fa);
+    if (fr.value === "" || !(r > 1 && Number.isFinite(r))) out.push(fr);
+    if (fm.value === "" || !(m >= 0 && Number.isFinite(m))) out.push(fm);
+    if (!out.length && !validScale(a, r, m)) out.push(fa, fr);
+    return out;
+  };
+  const valid = () => !bad().length;
   const preview = () => {
-    const s = valid() ? { a: Number(fa.value), r: Number(fr.value), min: Number(fm.value) } : scale;
+    const b = bad();
+    const s = b.length ? scale : { a: Number(fa.value), r: Number(fr.value), min: Number(fm.value) };
     setHTML($("#scale-preview"), [...LETTERS].map((L, k) => `<tr><th scope="row"><span class="band-tag" data-k="${k}" style="background:var(--band)">${L}</span></th><td class="num">${esc(bandText(k, s))}</td></tr>`).join(""));
-    $("#scale-error").hidden = valid();
+    $("#scale-error").hidden = !b.length;
+    for (const x of [fa, fr, fm]) x.setAttribute("aria-invalid", String(b.includes(x)));
+    return b;
   };
   $("#edit-scale").addEventListener("click", () => {
     fa.value = scale.a; fr.value = scale.r; fm.value = scale.min;
@@ -258,7 +278,7 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
     const v = e.submitter?.value;
     if (v === "reset") scale = { ...SCALE_DEFAULT };
     else if (v === "save") {
-      if (!valid()) { e.preventDefault(); preview(); return; }
+      if (!valid()) { e.preventDefault(); preview()[0].focus(); return; }
       scale = { a: Number(fa.value), r: Number(fr.value), min: Number(fm.value) };
     } else return;
     buildLadder();
@@ -270,7 +290,7 @@ export function initEnergy({ fmt, signed, announce, store, reduced, onScale }) {
       if (v.scale !== scale && JSON.stringify(v.scale) !== JSON.stringify(scale)) { scale = { ...v.scale }; buildLadder(); }
       render(v);
     },
-    init(s) { scale = { ...s }; buildLadder(); if (!phone.matches && store.get("sc-energy-open") === "1") open({ focus: false, quick: true }); },
+    init(s) { scale = { ...s }; buildLadder(); }, // always starts closed: a hidden item until asked for
     open, close, toggle, isOpen,
     contains: (el) => !!el && aside.contains(el),
     get view() { return lastView; },

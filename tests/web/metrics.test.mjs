@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   edges, classIdx, bandText, classNow, classTrial, trialStart, delta, honesty, loadScale, SCALE_DEFAULT,
+  trialDelta, trialOutcome, validScale,
 } from "../../web/metrics.js";
 
 // A history like the client's H: one sample per second.
@@ -94,4 +95,90 @@ test("loadScale rejects bad stored values", () => {
   assert.deepEqual(loadScale("not json"), SCALE_DEFAULT);
   assert.deepEqual(loadScale(null), SCALE_DEFAULT);
   assert.deepEqual(loadScale('{"a":0.3,"r":1.5,"min":2}'), { a: 0.3, r: 1.5, min: 2 });
+});
+
+test("trialDelta: decode that drops below the minimum reads as slower, not as no traffic", () => {
+  // Before: 12 tok/s at 60 W. From the start: 4 tok/s at 30 W (below the 5 tok/s minimum).
+  const H = hist(range(950, 1031, (t) => (t < 1000
+    ? { "llm.tok_s": 12, "gpu.power_w": 60, "llm.j_per_tok": 5 }
+    : { "llm.tok_s": 4, "gpu.power_w": 30, "llm.j_per_tok": 7.5 })));
+  const tok = trialDelta(H, "llm.tok_s", 1000, 1030);
+  assert.equal(tok.state, "ok");
+  assert.equal(tok.verdict, "worse");
+  assert.equal(Math.round(tok.pct), -67);
+  const w = trialDelta(H, "gpu.power_w", 1000, 1030);
+  assert.equal(w.state, "ok");
+  assert.equal(w.verdict, "better");
+  assert.deepEqual(trialDelta(H, "llm.j_per_tok", 1000, 1030), { state: "below-min", min: 5 });
+  const ct = classTrial(H, 1000, 1030);
+  assert.equal(ct.state, "below-min");
+  assert.equal(ct.now, null);
+  assert.equal(honesty(ct.before.k, null, tok, 5), "No class: decode is 67 % slower, below 5 tok/s.");
+});
+
+test("trialDelta: no decode after the start is no-decode; no baseline is no-decode", () => {
+  const stopped = hist(range(950, 1031, (t) => ({ "llm.tok_s": t < 1000 ? 12 : 0, "gpu.power_w": 40 })));
+  assert.equal(trialDelta(stopped, "llm.tok_s", 1000, 1030).state, "no-decode");
+  const idle = hist(range(950, 1031, () => ({ "llm.tok_s": 0, "gpu.power_w": 40 })));
+  assert.equal(trialDelta(idle, "llm.tok_s", 1000, 1030).state, "no-decode");
+});
+
+test("trialDelta: GPU power is gated only when the baseline was decoding", () => {
+  // Idle LLM: every power sample counts.
+  const idle = hist(range(950, 1031, (t) => ({ "llm.tok_s": null, "gpu.power_w": t < 1000 ? 40 : 30 })));
+  const a = trialDelta(idle, "gpu.power_w", 1000, 1030);
+  assert.equal(a.state, "ok");
+  assert.equal(a.d, -10);
+  // Decoding baseline: power samples without decode are left out on both sides.
+  const busy = hist(range(950, 1031, (t) => {
+    const dec = t % 2 === 0;
+    return { "llm.tok_s": dec ? 20 : 0, "gpu.power_w": dec ? (t < 1000 ? 60 : 50) : 5 };
+  }));
+  const b = trialDelta(busy, "gpu.power_w", 1000, 1030);
+  assert.equal(b.before, 60);
+  assert.equal(b.after, 50);
+});
+
+test("trialDelta: settle, minimum after-window and window edges", () => {
+  // The sample at t = started is in neither window: before is 30, after is 20, t = 1000 is 999.
+  const H = hist(range(950, 1041, (t) => ({ "gpu.power_w": t === 1000 ? 999 : t < 1000 ? 30 : 20 })));
+  assert.deepEqual(trialDelta(H, "gpu.power_w", 1000, 1004), { state: "measuring", wait: 16 });
+  // At 1015 the after-window holds 6 samples (1010..1015): still measuring.
+  assert.deepEqual(trialDelta(H, "gpu.power_w", 1000, 1015), { state: "measuring", wait: 5 });
+  const d = trialDelta(H, "gpu.power_w", 1000, 1020);
+  assert.equal(d.state, "ok");
+  assert.equal(d.before, 30);
+  assert.equal(d.after, 20);
+});
+
+test("delta: a flat noisy series stays within noise", () => {
+  // Seeded AR(1) noise (rho 0.8), sigma 3 W around 60 W: 300 no-change trials of 30 s before, 10 s after.
+  let seed = 42;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  const gauss = () => Math.sqrt(-2 * Math.log(rnd() || 1e-12)) * Math.cos(2 * Math.PI * rnd());
+  let false_ = 0;
+  for (let n = 0; n < 300; n++) {
+    let e = gauss() * 3;
+    const xs = Array.from({ length: 40 }, () => (e = 0.8 * e + Math.sqrt(1 - 0.64) * 3 * gauss(), 60 + e));
+    if (delta("gpu.power_w", xs.slice(0, 30), xs.slice(30)).verdict !== "within noise") false_++;
+  }
+  assert.ok(false_ / 300 < 0.1, `false verdicts: ${false_} of 300`);
+});
+
+test("trialOutcome reads Keep after reboot from the events after kept", () => {
+  const kept = { kind: "kept", persist: false, values: {} };
+  assert.deepEqual(trialOutcome([{ kind: "applied" }, kept]), { kind: "kept", ev: kept, boot: null });
+  assert.equal(trialOutcome([kept, { kind: "persisted", gpu: true }]).boot, "saved");
+  assert.equal(trialOutcome([kept, { kind: "persist_failed", error: "x" }]).boot, "failed");
+  // An older persisted event before the keep does not count.
+  assert.equal(trialOutcome([{ kind: "persisted" }, kept]).boot, null);
+  const rev = { kind: "reverted", why: "timeout" };
+  assert.deepEqual(trialOutcome([kept, { kind: "persisted" }, { kind: "applied" }, rev]), { kind: "reverted", ev: rev, boot: null });
+});
+
+test("validScale rejects values that overflow", () => {
+  assert.ok(validScale(0.25, 1.41, 5));
+  assert.ok(!validScale(1e308, 1.41, 5));
+  assert.ok(!validScale(0.25, 1e100, 5));
+  assert.ok(!validScale(0.25, 1.41, Infinity));
 });
