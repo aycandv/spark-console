@@ -127,6 +127,45 @@ class ControllerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.c.apply({"epp": 1}, trial_s=1)
 
+    def test_failed_revert_reverts_what_it_can_keeps_trial_and_retries(self):
+        self.c.apply({"epp": 0, "gpu_cap_mhz": 3000})
+        self.m.fail_on = "gpu-cap"
+        self.clock.t += 60
+        self.c.tick()
+        self.assertEqual(self.m.state["epp"], 128)  # reverted despite the GPU failure
+        self.assertEqual(self.m.state["gpu_cap_mhz"], 3000)
+        st = self.c.status()
+        self.assertIsNotNone(st["trial"])
+        self.assertTrue(st["trial"]["revert_error"])
+        self.m.fail_on = None
+        self.clock.t += 10
+        self.c.tick()
+        self.assertEqual(self.m.state["gpu_cap_mhz"], 2100)
+        self.assertIsNone(self.c.status()["trial"])
+
+    def test_persist_refused_during_trial(self):
+        self.c.apply({"epp": 0})
+        with self.assertRaises(control.Busy):
+            self.c.persist(gpu=True, cpu=True)
+
+    def test_keep_after_trial_ended_is_refused(self):
+        self.c.apply({"epp": 0})
+        self.clock.t += 60
+        self.c.tick()
+        with self.assertRaises(control.Busy):
+            self.c.keep(persist=True)
+        self.assertFalse(any(c[0].startswith("persist") for c in self.m.calls))
+
+    def test_keep_with_failing_persist_keeps_values_and_reports(self):
+        self.c.apply({"epp": 7})
+        self.m.fail_on = "persist-cpu"
+        with self.assertRaises(control.HelperError):
+            self.c.keep(persist=True)
+        self.assertEqual(self.m.state["epp"], 7)
+        self.assertIsNone(self.c.status()["trial"])
+        kinds = [e["kind"] for e in self.c.status()["events"]]
+        self.assertEqual(kinds[-2:], ["kept", "persist_failed"])
+
     def test_shutdown_reverts_open_trial(self):
         self.c.apply({"epp": 1})
         self.c.shutdown()

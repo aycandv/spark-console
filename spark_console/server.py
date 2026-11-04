@@ -1,14 +1,18 @@
 """HTTP server: static UI, JSON state, SSE stream, and POST controls.
 
-Binds to loopback; `tailscale serve` publishes it. Checks on every request:
+Listens on a Unix socket in a 0700 directory (or TCP loopback for development);
+`tailscale serve` publishes it. Checks on every request:
 - Host must be a known name (DNS-rebinding guard).
-- A Tailscale-User-Login header, when present, must be the owner's login.
+- Tailscale-User-Login must be the owner's login. tailscaled sets it and drops any
+  value the client sent; tagged devices and Funnel get no header, so they get no access.
 - POSTs must be JSON with X-Spark-Console: 1 (forces a CORS preflight that is never
   answered, so another site cannot post) and a same-host Origin when one is sent.
 """
 import json
 import mimetypes
 import os
+import socketserver
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -16,6 +20,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from .control import Busy, HelperError
 
 MAX_BODY = 64 * 1024
+MAX_STREAMS = 8
 TYPES = {".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".woff2": "font/woff2", ".svg": "image/svg+xml"}
 
 
@@ -24,14 +29,28 @@ class App:
         self.sampler, self.controller, self.profiles = sampler, controller, profiles
         self.owner, self.hostnames, self.web_dir = owner, set(hostnames), os.path.realpath(web_dir)
         self.control_state = control_state or controller.status
+        self.streams = threading.BoundedSemaphore(MAX_STREAMS)
+        self._cached = (None, b"")
 
     def state(self):
         return {"snapshot": self.sampler.snapshot, "control": self.control_state(), "profiles": self.profiles.all()}
+
+    def state_bytes(self, seq):
+        """The SSE payload for one sampler tick, built once and shared by all streams."""
+        cached_seq, data = self._cached
+        if cached_seq != seq:
+            data = json.dumps(self.state()).encode()
+            self._cached = (seq, data)
+        return data
 
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "spark-console"
     app: App = None  # set by make_server
+    timeout = 30  # socket timeout: a stalled client cannot hold a thread forever
+
+    def address_string(self):
+        return self.client_address[0] if self.client_address else "unix"
 
     def log_message(self, fmt, *args):  # quiet: the UI polls constantly
         if not (200 <= getattr(self, "_status", 200) < 400):
@@ -62,8 +81,8 @@ class Handler(BaseHTTPRequestHandler):
         if host not in self.app.hostnames:
             return self._error(403, f"unknown host {host!r}")
         login = self.headers.get("Tailscale-User-Login")
-        if login is not None and login != self.app.owner:
-            return self._error(403, "this console belongs to another tailnet user")
+        if not self.app.owner or login != self.app.owner:
+            return self._error(403, "open this console through tailscale serve as its owner")
         if mutating:
             if self.headers.get("X-Spark-Console") != "1" or not (self.headers.get("Content-Type") or "").startswith("application/json"):
                 return self._error(403, "missing X-Spark-Console header or JSON body")
@@ -74,8 +93,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
-        if n > MAX_BODY:
-            raise ValueError("body too large")
+        if not 0 <= n <= MAX_BODY:
+            raise ValueError("bad body length")
         data = json.loads(self.rfile.read(n) or b"{}")
         if not isinstance(data, dict):
             raise ValueError("body must be a JSON object")
@@ -101,7 +120,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _static(self, path):
         rel = "index.html" if path in ("", "/") else unquote(path).lstrip("/")
-        full = os.path.realpath(os.path.join(self.app.web_dir, rel))
+        try:
+            full = os.path.realpath(os.path.join(self.app.web_dir, rel))
+        except ValueError:  # e.g. an embedded NUL
+            return self._error(404, "not found")
         if not full.startswith(self.app.web_dir + os.sep) or not os.path.isfile(full):
             return self._error(404, "not found")
         ext = os.path.splitext(full)[1]
@@ -109,15 +131,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, f.read(), TYPES.get(ext) or mimetypes.guess_type(full)[0] or "application/octet-stream")
 
     def _stream(self):
-        self._status = 200
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Accel-Buffering", "no")
-        self.end_headers()
-        s = self.app.sampler
-        seen = -1
+        if not self.app.streams.acquire(blocking=False):
+            return self._error(503, "too many live views open")
         try:
+            self._status = 200
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            s = self.app.sampler
+            seen = -1
             while True:
                 with s.cond:
                     if s.seq == seen:
@@ -127,10 +151,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(b": keepalive\n\n")
                 else:
                     seen = seq
-                    self.wfile.write(b"data: " + json.dumps(self.app.state()).encode() + b"\n\n")
+                    self.wfile.write(b"data: " + self.app.state_bytes(seq) + b"\n\n")
                 self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+        except (OSError, TimeoutError):
             return
+        finally:
+            self.app.streams.release()
 
     # --- POST -------------------------------------------------------------------------
     def do_POST(self):
@@ -165,8 +191,20 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, {"control": self.app.control_state(), "profiles": p.all(), "trial": c.status()["trial"]})
 
 
-def make_server(app, host, port):
+class UnixHTTPServer(socketserver.ThreadingUnixStreamServer):
+    daemon_threads = True
+
+
+def make_server(app, bind, port):
+    """bind is a TCP address, or "unix:/path/to.sock" (its directory is made 0700)."""
     handler = type("BoundHandler", (Handler,), {"app": app})
-    httpd = ThreadingHTTPServer((host, port), handler)
+    if bind.startswith("unix:"):
+        path = bind[5:]
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        os.chmod(os.path.dirname(path), 0o700)
+        if os.path.exists(path):
+            os.remove(path)  # stale socket from a previous run
+        return UnixHTTPServer(path, handler)
+    httpd = ThreadingHTTPServer((bind, port), handler)
     httpd.daemon_threads = True
     return httpd

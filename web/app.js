@@ -179,7 +179,10 @@ function renderCommit() {
   for (const id of ["#apply", "#discard", "#keep", "#keep-boot", "#revert"]) $(id).disabled = S.busy;
   if (t) {
     bar.dataset.mode = "trial";
-    text.innerHTML = `<b>Trial</b> · ${esc(changeList(t.applied))} · reverting in <b>${mmss(t.remaining_s)}</b>`;
+    text.innerHTML = t.revert_error
+      ? `<b>Revert failed, retrying in ${mmss(t.remaining_s)}</b> · ${esc(t.revert_error)}`
+      : `<b>Trial</b> · ${esc(changeList(t.applied))} · reverting in <b>${mmss(t.remaining_s)}</b>`;
+    $("#keep").disabled = $("#keep-boot").disabled = S.busy || !!t.revert_error;
     $("#drain").style.transform = `scaleX(${t.total_s ? t.remaining_s / t.total_s : 0})`;
   } else if (staged) {
     bar.dataset.mode = "staged";
@@ -194,7 +197,7 @@ function renderCommit() {
   }
   const err = $("#commit-error");
   err.hidden = !S.error;
-  err.textContent = S.error ? `Not applied: ${S.error}` : "";
+  err.textContent = S.error ? `Failed: ${S.error}` : "";
 }
 
 function eventText(e) {
@@ -204,6 +207,7 @@ function eventText(e) {
     case "kept": return `Kept${e.persist ? " after reboot" : " until reboot"}: ${changeList(e.values)}`;
     case "persisted": return `Saved for boot: ${[e.gpu && "GPU", e.cpu && "CPU"].filter(Boolean).join(" + ")}`;
     case "failed": return `Failed: ${e.error}`;
+    case "persist_failed": return `Kept, but saving for boot failed: ${e.error}`;
     case "revert_failed": return `Revert failed: ${e.error}`;
     case "rollback_failed": return `Rollback of ${LABEL[e.knob] || e.knob} failed: ${e.error}`;
     default: return e.kind;

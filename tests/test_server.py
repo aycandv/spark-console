@@ -43,7 +43,7 @@ class ServerTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def req(self, method, path, body=None, headers=None):
-        h = {"Host": f"127.0.0.1:{self.port}", **(headers or {})}
+        h = {"Host": f"127.0.0.1:{self.port}", "Tailscale-User-Login": "owner@github", **(headers or {})}
         if body is not None:
             h.setdefault("Content-Type", "application/json")
             h.setdefault("X-Spark-Console", "1")
@@ -103,6 +103,36 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.req("GET", "/api/state", headers={**tail, "Tailscale-User-Login": "owner@github"})[0], 200)
         self.assertEqual(self.req("GET", "/api/state", headers={**tail, "Tailscale-User-Login": "guest@github"})[0], 403)
 
+    def test_missing_login_is_refused(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", "/api/state", headers={"Host": f"127.0.0.1:{self.port}"})
+        self.assertEqual(c.getresponse().status, 403)
+        c.close()
+
+    def test_negative_content_length_and_nul_path(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.putrequest("POST", "/api/revert", skip_host=True)
+        for k, v in {"Host": f"127.0.0.1:{self.port}", "Tailscale-User-Login": "owner@github",
+                     "Content-Type": "application/json", "X-Spark-Console": "1", "Content-Length": "-1"}.items():
+            c.putheader(k, v)
+        c.endheaders()
+        self.assertEqual(c.getresponse().status, 400)
+        c.close()
+        self.assertEqual(self.req("GET", "/a%00b")[0], 404)
+
+    def test_stream_limit(self):
+        conns = []
+        for _ in range(server.MAX_STREAMS):
+            c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("GET", "/api/stream", headers={"Host": f"127.0.0.1:{self.port}", "Tailscale-User-Login": "owner@github"})
+            r = c.getresponse()
+            r.fp.readline()
+            conns.append((c, r))
+        self.assertEqual(self.req("GET", "/api/stream")[0], 503)
+        for c, r in conns:
+            r.close()
+            c.close()
+
     def test_unknown_host_is_refused(self):
         self.assertEqual(self.req("GET", "/api/state", headers={"Host": "rebind.evil.example"})[0], 403)
 
@@ -116,7 +146,7 @@ class ServerTest(unittest.TestCase):
 
     def test_sse_stream_sends_snapshot(self):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
-        c.request("GET", "/api/stream", headers={"Host": f"127.0.0.1:{self.port}"})
+        c.request("GET", "/api/stream", headers={"Host": f"127.0.0.1:{self.port}", "Tailscale-User-Login": "owner@github"})
         r = c.getresponse()
         self.assertEqual(r.getheader("Content-Type"), "text/event-stream")
         line = r.fp.readline()
@@ -127,3 +157,32 @@ class ServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnixSocketTest(unittest.TestCase):
+    def test_serves_on_unix_socket_with_private_mode(self):
+        import os
+        import socket
+        import stat
+        with tempfile.TemporaryDirectory() as d:
+            web = Path(d) / "web"
+            web.mkdir()
+            (web / "index.html").write_text("hi")
+            m = FakeMachine()
+            ctl = control.Controller(run=m.run, read_current=m.current, read_limits=lambda: LIMITS,
+                                     read_persisted=lambda: {}, clock=Clock())
+            app = server.App(sampler=FakeSampler(), controller=ctl, profiles=control.ProfileStore(f"{d}/p.json"),
+                             owner="o@gh", hostnames={"dgx0.example.ts.net"}, web_dir=str(web))
+            path = f"{d}/run/http.sock"
+            httpd = server.make_server(app, f"unix:{path}", 0)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            try:
+                self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode), 0o700)
+                s = socket.socket(socket.AF_UNIX)
+                s.connect(path)
+                s.sendall(b"GET / HTTP/1.0\r\nHost: dgx0.example.ts.net:9443\r\nTailscale-User-Login: o@gh\r\n\r\n")
+                self.assertTrue(s.recv(100).startswith(b"HTTP/1.0 200"))
+                s.close()
+            finally:
+                httpd.shutdown()
+                httpd.server_close()

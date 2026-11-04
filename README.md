@@ -13,14 +13,14 @@ Python 3.12 standard library on the server, plain HTML/CSS/JS with vendored uPlo
 
 | Part | Runs as | Does |
 |---|---|---|
-| `spark_console/` server | your user (systemd user unit) | reads sysfs, `/proc`, `nvidia-smi`, LLM `/metrics`; serves the UI on `127.0.0.1:5566` |
+| `spark_console/` server | your user (systemd user unit) | reads sysfs, `/proc`, `nvidia-smi`, LLM `/metrics`; serves the UI on a Unix socket in `$XDG_RUNTIME_DIR/spark-console/` (mode 0700) |
 | `spark_console/helper.py` → `/usr/local/sbin/spark-console-helper` | root, through one sudoers line | the only code that changes hardware; accepts a fixed list of actions and checks every value |
 | `tailscale serve` | tailscaled | publishes the UI on the tailnet over HTTPS |
 
 Security model:
 
-- The server binds to loopback. The tailnet is the only way in from other machines.
-- When a request carries Tailscale's `Tailscale-User-Login` header, it must be the node owner's login.
+- The server listens on a Unix socket in a 0700 directory, so other local accounts and containers cannot connect. The tailnet is the only way in.
+- Every request must carry Tailscale's `Tailscale-User-Login` header with the node owner's login. tailscaled sets this header and drops any value that the client sends. Tagged devices and Funnel traffic get no header, so they get no access.
 - Requests must name a known host (DNS-rebinding guard). Changes must be JSON POSTs with `X-Spark-Console: 1` and a same-host `Origin`, so another site cannot use your browser to change clocks.
 - The root helper is a root-owned copy. It never uses a shell, and it refuses anything outside its ranges: GPU 300 to 3100 MHz, EPP 0 to 255, CPU frequency inside each cluster's hardware range, and governors from the kernel's list.
 - NVML cannot read a GPU clock cap back. The helper therefore writes a marker (`/run/spark-console/gpu-clock-cap`) and also sparkDash's marker (`/run/sparkdash/gpu-clock-cap`), so sparkDash shows the cap too.
@@ -57,7 +57,7 @@ Requirements:
 3. Publish the UI on the tailnet:
 
    ```sh
-   tailscale serve --bg --https=9443 http://127.0.0.1:5566
+   tailscale serve --bg --https=9443 unix:$XDG_RUNTIME_DIR/spark-console/http.sock
    ```
 
    The command prints `https://<node>.<tailnet>.ts.net:9443/`.
@@ -80,7 +80,7 @@ Requirements:
 4. Look at the effect: the read-back clock, GPU power, tok/s and J/token.
 5. Click **Keep**, **Keep after reboot** or **Revert now**.
 
-   If you do nothing, the previous values come back at the end of the trial. The **Activity** section records each step.
+   If you do nothing, the previous values come back at the end of the trial. If a revert fails, the bar shows the error and tries again every 10 s. The **Activity** section records each step.
 
 ## Uninstall
 
@@ -110,15 +110,15 @@ Requirements:
 2. Start the server without hardware access:
 
    ```sh
-   python3 -m spark_console --port 5567 --simulate
+   python3 -m spark_console --simulate --bind 127.0.0.1 --port 5567 --owner dev@local
    ```
 
-   With `--simulate`, the controls change an in-memory copy. The readings are still real.
+   With `--simulate`, the controls change an in-memory copy. The readings are still real. Each request must send the header `Tailscale-User-Login: dev@local`.
 
 3. Run the browser smoke check against that server (needs Node 22 and `google-chrome`):
 
    ```sh
-   node scripts/ui_smoke.mjs http://127.0.0.1:5567/ /tmp
+   node scripts/ui_smoke.mjs http://127.0.0.1:5567/ /tmp dev@local
    ```
 
    The last line is `ui smoke: pass`. Screenshots go to `/tmp`.

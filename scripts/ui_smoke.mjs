@@ -1,5 +1,6 @@
 // UI smoke check through the Chrome DevTools Protocol (Node >= 22, google-chrome).
-// Run against a server started with --simulate:  node scripts/ui_smoke.mjs http://127.0.0.1:5566/ OUT_DIR
+// Run against a server started with --simulate --bind 127.0.0.1 --port 5567 --owner dev@local:
+//   node scripts/ui_smoke.mjs http://127.0.0.1:5567/ OUT_DIR dev@local
 // It loads the page, stages a change, applies it, keeps it, checks for console errors,
 // and writes desktop.png, trial.png and mobile.png to OUT_DIR. Exit code 1 on any failure.
 import { spawn } from "node:child_process";
@@ -9,6 +10,7 @@ import { join } from "node:path";
 
 const url = process.argv[2] || "http://127.0.0.1:5566/";
 const out = process.argv[3] || ".";
+const login = process.argv[4] || "dev@local"; // sent as Tailscale-User-Login, like tailscale serve does
 const port = 9333;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -54,6 +56,8 @@ try {
   await send("Runtime.enable");
   await send("Log.enable");
   await send("Page.enable");
+  await send("Network.enable");
+  await send("Network.setExtraHTTPHeaders", { headers: { "Tailscale-User-Login": login } });
   await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   await send("Page.navigate", { url });
   await sleep(4000);

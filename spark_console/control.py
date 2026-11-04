@@ -17,6 +17,8 @@ HELPER_PATH = helper.SELF
 KNOBS = ("governor", "epp", "x925_max_khz", "a725_max_khz", "gpu_cap_mhz")  # also the apply order
 GPU_KNOBS = {"gpu_cap_mhz"}
 TRIAL_S = (10, 600)
+RETRY_S = 10  # seconds between attempts when a revert fails
+LABELS = {"gpu_cap_mhz": "GPU cap", "epp": "EPP", "governor": "governor", "x925_max_khz": "X925 max", "a725_max_khz": "A725 max"}
 
 
 class Busy(Exception):
@@ -28,7 +30,7 @@ class HelperError(Exception):
 
 
 def sudo_helper(args):
-    proc = subprocess.run(["sudo", "-n", HELPER_PATH, *args], capture_output=True, text=True, timeout=30)
+    proc = subprocess.run(["sudo", "-n", HELPER_PATH, *args], capture_output=True, text=True, timeout=15)
     if proc.returncode != 0:
         raise HelperError((proc.stderr or proc.stdout).strip() or f"helper exit {proc.returncode}")
 
@@ -96,6 +98,17 @@ class Controller:
             raise
         return done
 
+    def _restore(self, values: dict) -> dict:
+        """Best effort, no rollback: set every knob it can. Returns {knob: error} for the ones that failed."""
+        failed = {}
+        for k in KNOBS:
+            if k in values:
+                try:
+                    self._run(_command(k, values[k]))
+                except Exception as e:
+                    failed[k] = str(e)
+        return failed
+
     def apply(self, changes: dict, trial_s=None) -> dict:
         trial_s = self.trial_s if trial_s is None else trial_s
         if not _is_int(trial_s) or not TRIAL_S[0] <= trial_s <= TRIAL_S[1]:
@@ -120,13 +133,17 @@ class Controller:
             return self.status()
 
     def _revert(self, why):
-        t, self._trial = self._trial, None
-        try:
-            self._set(t["prev"])
-            self._event("reverted", why=why, values=t["prev"])
-        except Exception as e:
-            self._event("revert_failed", why=why, error=str(e))
-            raise
+        t = self._trial
+        failed = self._restore({k: v for k, v in t["prev"].items() if k in t.get("pending", t["prev"])})
+        if failed:
+            # Keep the trial open with only the knobs still to restore, and retry soon.
+            t["pending"] = {k: t["prev"][k] for k in failed}
+            t["revert_error"] = "; ".join(f"{LABELS.get(k, k)}: {e}" for k, e in failed.items())
+            t["deadline"] = self._clock() + RETRY_S
+            self._event("revert_failed", why=why, error=t["revert_error"])
+            raise HelperError(t["revert_error"])
+        self._trial = None
+        self._event("reverted", why=why, values=t["prev"])
 
     def revert(self):
         with self._lock:
@@ -146,14 +163,27 @@ class Controller:
         with self._lock:
             t = self._trial
             if not t:
-                return self.status()
+                raise Busy("the trial already ended; nothing was kept")
+            if t.get("revert_error"):
+                raise Busy("a revert is in progress; it could not be completed yet")
             self._trial = None
-            self._event("kept", values=t["applied"], persist=persist)
+            self._event("kept", values=t["applied"], persist=False)
             if persist:
-                self.persist(gpu=bool(GPU_KNOBS & t["applied"].keys()), cpu=bool(t["applied"].keys() - GPU_KNOBS))
+                try:
+                    self._persist(gpu=bool(GPU_KNOBS & t["applied"].keys()), cpu=bool(t["applied"].keys() - GPU_KNOBS))
+                except Exception as e:
+                    self._event("persist_failed", error=str(e))
+                    raise
             return self.status()
 
     def persist(self, gpu: bool, cpu: bool):
+        with self._lock:
+            if self._trial:
+                raise Busy("keep or revert the open trial first")
+            self._persist(gpu, cpu)
+            return self.status()
+
+    def _persist(self, gpu: bool, cpu: bool):
         cur = self._current()
         if gpu:
             v = cur["gpu_cap_mhz"]
@@ -165,16 +195,20 @@ class Controller:
     def shutdown(self):
         with self._lock:
             if self._trial:
-                self._revert("shutdown")
+                try:
+                    self._revert("shutdown")
+                except HelperError:
+                    pass  # recorded; the values stay until reboot
 
     def status(self) -> dict:
-        with self._lock:
-            t = self._trial
-            trial = None
-            if t:
-                trial = {"applied": t["applied"], "prev": t["prev"], "total_s": t["total_s"],
-                         "remaining_s": max(0, round(t["deadline"] - self._clock()))}
-            return {"trial": trial, "events": list(self._events), "persisted": self._persisted()}
+        # No lock: apply/revert can hold it for several sudo calls, and readers must not wait on that.
+        t = self._trial
+        trial = None
+        if t:
+            trial = {"applied": t["applied"], "prev": t["prev"], "total_s": t["total_s"],
+                     "remaining_s": max(0, round(t["deadline"] - self._clock())),
+                     "revert_error": t.get("revert_error")}
+        return {"trial": trial, "events": list(self._events), "persisted": self._persisted()}
 
 
 # --- readers for the real machine ------------------------------------------------

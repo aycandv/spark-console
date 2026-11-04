@@ -1,4 +1,4 @@
-"""python3 -m spark_console [--port 5566] [--simulate]"""
+"""python3 -m spark_console [--bind unix:PATH | --bind 127.0.0.1 --port N] [--simulate]"""
 import argparse
 import json
 import os
@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 from . import control, sampler, server
 
@@ -49,8 +50,10 @@ class Simulated:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="spark-console")
-    ap.add_argument("--bind", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=5566)
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    ap.add_argument("--bind", default=f"unix:{runtime}/spark-console/http.sock",
+                    help="unix:PATH (default; only you and root can connect) or a TCP address for development")
+    ap.add_argument("--port", type=int, default=5566, help="TCP port when --bind is an address")
     ap.add_argument("--trial", type=int, default=60, help="seconds before an applied change reverts")
     ap.add_argument("--llm", action="append", help="LLM server base URL with Prometheus /metrics (repeatable)")
     ap.add_argument("--owner", help="tailnet login allowed in (default: this node's owner)")
@@ -60,6 +63,8 @@ def main(argv=None):
 
     owner, dns = tailnet_identity()
     owner = args.owner or owner
+    if not owner:
+        print("warning: no tailnet owner known (tailscale down?) and no --owner: every request will be refused", flush=True)
     hostnames = {"127.0.0.1", "localhost", "::1"} | ({dns} if dns else set())
 
     real_current, limits, persisted = control.make_readers()
@@ -79,7 +84,14 @@ def main(argv=None):
     smp.control_status = control_state
     app = server.App(sampler=smp, controller=ctl, profiles=control.ProfileStore(args.profiles), owner=owner,
                      hostnames=hostnames, web_dir=WEB_DIR, control_state=control_state)
-    threading.Thread(target=smp.run_forever, kwargs={"on_tick": ctl.tick}, daemon=True, name="sampler").start()
+    threading.Thread(target=smp.run_forever, daemon=True, name="sampler").start()
+
+    def control_loop():  # own thread: a slow sudo call must not stall sampling
+        while True:
+            ctl.tick()
+            time.sleep(1)
+
+    threading.Thread(target=control_loop, daemon=True, name="control").start()
     httpd = server.make_server(app, args.bind, args.port)
 
     def stop(*_):
@@ -91,7 +103,8 @@ def main(argv=None):
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    print(f"spark-console on http://{args.bind}:{args.port} owner={owner} hosts={sorted(hostnames)}"
+    where = args.bind if args.bind.startswith("unix:") else f"http://{args.bind}:{args.port}"
+    print(f"spark-console on {where} owner={owner} hosts={sorted(hostnames)}"
           f"{' SIMULATE' if args.simulate else ''}", flush=True)
     httpd.serve_forever()
     return 0
