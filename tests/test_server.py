@@ -143,6 +143,10 @@ class ServerTest(unittest.TestCase):
     def test_unknown_host_is_refused(self):
         self.assertEqual(self.req("GET", "/api/state", headers={"Host": "rebind.evil.example"})[0], 403)
 
+    def test_reapply_boot_route(self):
+        self.assertEqual(self.req("POST", "/api/reapply-boot", {})[0], 200)
+        self.assertEqual(self.m.calls[-1], ["reapply-boot"])
+
     def test_profiles_and_stats_reset(self):
         self.assertEqual(self.req("POST", "/api/profiles", {"name": "Bench", "values": {"epp": 0}})[0], 200)
         status, body = self.req("GET", "/api/state")

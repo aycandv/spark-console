@@ -166,6 +166,43 @@ class ControllerTest(unittest.TestCase):
         kinds = [e["kind"] for e in self.c.status()["events"]]
         self.assertEqual(kinds[-2:], ["kept", "persist_failed"])
 
+    def test_trial_journal_lets_a_restarted_server_revert(self):
+        with tempfile.TemporaryDirectory() as d:
+            journal = f"{d}/trial.json"
+            c1 = control.Controller(run=self.m.run, read_current=self.m.current, read_limits=lambda: LIMITS,
+                                    read_persisted=lambda: {}, clock=self.clock, journal=journal)
+            c1.apply({"epp": 5, "gpu_cap_mhz": 1500})
+            self.assertTrue(Path(journal).exists())
+            # The process dies here without reverting. A new one starts:
+            c2 = control.Controller(run=self.m.run, read_current=self.m.current, read_limits=lambda: LIMITS,
+                                    read_persisted=lambda: {}, clock=self.clock, journal=journal)
+            c2.recover()
+            self.assertEqual(self.m.state["epp"], 128)
+            self.assertEqual(self.m.state["gpu_cap_mhz"], 2100)
+            self.assertFalse(Path(journal).exists())
+            self.assertEqual(c2.status()["events"][-1]["why"], "recovered after restart")
+
+    def test_journal_removed_on_keep_and_revert(self):
+        with tempfile.TemporaryDirectory() as d:
+            journal = f"{d}/trial.json"
+            c = control.Controller(run=self.m.run, read_current=self.m.current, read_limits=lambda: LIMITS,
+                                   read_persisted=lambda: {}, clock=self.clock, journal=journal)
+            c.apply({"epp": 5})
+            c.keep()
+            self.assertFalse(Path(journal).exists())
+            c.apply({"epp": 6})
+            c.revert()
+            self.assertFalse(Path(journal).exists())
+            c.recover()  # nothing to do
+            self.assertEqual(self.m.state["epp"], 5)
+
+    def test_reapply_boot(self):
+        self.c.reapply_boot()
+        self.assertEqual(self.m.calls[-1], ["reapply-boot"])
+        self.c.apply({"epp": 1})
+        with self.assertRaises(control.Busy):
+            self.c.reapply_boot()
+
     def test_shutdown_reverts_open_trial(self):
         self.c.apply({"epp": 1})
         self.c.shutdown()

@@ -121,6 +121,11 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(self.run.calls, [])
         self.assertEqual(read(Path(self.ctx.run_dirs[1]) / "gpu-clock-cap"), "2100 abc-123")
 
+    def test_reapply_boot_restarts_exactly_the_two_units(self):
+        self.assertEqual(self.main("reapply-boot"), 0)
+        self.assertEqual(self.run.calls, [["/usr/bin/systemctl", "restart", "gb10-clocklock.service", "cpu-epp.service"]])
+        self.assertEqual(self.main("reapply-boot", "sshd.service"), 2)
+
     def test_unknown_action_and_extra_args_are_refused(self):
         self.assertEqual(self.main("shell", "id"), 2)
         self.assertEqual(self.main("gpu-reset", "now"), 2)

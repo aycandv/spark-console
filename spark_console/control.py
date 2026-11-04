@@ -70,12 +70,40 @@ def validate(changes: dict, limits: dict) -> dict:
 
 
 class Controller:
-    def __init__(self, run, read_current, read_limits, read_persisted, clock=time.monotonic, trial_s=60):
+    def __init__(self, run, read_current, read_limits, read_persisted, clock=time.monotonic, trial_s=60, journal=None):
         self._run, self._current, self._limits, self._persisted = run, read_current, read_limits, read_persisted
+        self._journal = journal  # file that records an open trial, so a restarted server can revert it
         self._clock, self.trial_s = clock, trial_s
         self._lock = threading.RLock()
         self._trial = None
         self._events = []
+
+    def _journal_write(self, t):
+        if self._journal:
+            os.makedirs(os.path.dirname(self._journal), exist_ok=True)
+            tmp = self._journal + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"applied": t["applied"], "prev": t["prev"], "total_s": t["total_s"]}, f)
+            os.replace(tmp, self._journal)
+
+    def _journal_clear(self):
+        if self._journal and os.path.exists(self._journal):
+            os.remove(self._journal)
+
+    def recover(self):
+        """On startup: a trial left open by a crashed server is reverted now."""
+        if not (self._journal and os.path.exists(self._journal)):
+            return
+        with self._lock:
+            with open(self._journal) as f:
+                j = json.load(f)
+            now = self._clock()
+            self._trial = {"applied": j["applied"], "prev": j["prev"], "started": now, "deadline": now,
+                           "total_s": j.get("total_s", 0)}
+            try:
+                self._revert("recovered after restart")
+            except HelperError:
+                pass  # trial stays open; tick() retries
 
     def _event(self, kind, **detail):
         self._events = (self._events + [{"t": time.time(), "kind": kind, **detail}])[-50:]
@@ -129,6 +157,7 @@ class Controller:
             now = self._clock()
             self._trial = {"applied": changes, "prev": {k: cur.get(k) for k in changes},
                            "started": now, "deadline": now + trial_s, "total_s": trial_s}
+            self._journal_write(self._trial)
             self._event("applied", applied=changes)
             return self.status()
 
@@ -143,6 +172,7 @@ class Controller:
             self._event("revert_failed", why=why, error=t["revert_error"])
             raise HelperError(t["revert_error"])
         self._trial = None
+        self._journal_clear()
         self._event("reverted", why=why, values=t["prev"])
 
     def revert(self):
@@ -167,6 +197,7 @@ class Controller:
             if t.get("revert_error"):
                 raise Busy("a revert is in progress; it could not be completed yet")
             self._trial = None
+            self._journal_clear()
             self._event("kept", values=t["applied"], persist=False)
             if persist:
                 try:
@@ -181,6 +212,14 @@ class Controller:
             if self._trial:
                 raise Busy("keep or revert the open trial first")
             self._persist(gpu, cpu)
+            return self.status()
+
+    def reapply_boot(self):
+        with self._lock:
+            if self._trial:
+                raise Busy("keep or revert the open trial first")
+            self._run(["reapply-boot"])
+            self._event("boot_reapplied")
             return self.status()
 
     def _persist(self, gpu: bool, cpu: bool):

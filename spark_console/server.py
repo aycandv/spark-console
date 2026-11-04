@@ -174,6 +174,8 @@ class Handler(BaseHTTPRequestHandler):
                 c.keep(persist=body.get("persist") is True)
             elif route == "/api/revert":
                 c.revert()
+            elif route == "/api/reapply-boot":
+                c.reapply_boot()
             elif route == "/api/persist":
                 c.persist(gpu=body.get("gpu") is True, cpu=body.get("cpu") is True)
             elif route == "/api/profiles":

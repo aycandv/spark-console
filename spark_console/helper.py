@@ -183,6 +183,11 @@ def persist_cpu(ctx, epp, x925_khz, a725_khz, governor):
             f"ExecStart={SELF} cpu-max a725 {khz['a725']}\n")
 
 
+def reapply_boot(ctx):
+    """Run the two boot units now, exactly as at boot (ExecStop, then ExecStart with any drop-in)."""
+    ctx.run([SYSTEMCTL, "restart", "gb10-clocklock.service", "cpu-epp.service"])
+
+
 ACTIONS = {
     "gpu-cap": (gpu_cap, 1),
     "gpu-reset": (gpu_reset, 0),
@@ -192,6 +197,7 @@ ACTIONS = {
     "cpu-governor": (cpu_governor, 1),
     "persist-gpu": (persist_gpu, 1),
     "persist-cpu": (persist_cpu, 4),
+    "reapply-boot": (reapply_boot, 0),
 }
 
 

@@ -58,6 +58,8 @@ def main(argv=None):
     ap.add_argument("--llm", action="append", help="LLM server base URL with Prometheus /metrics (repeatable)")
     ap.add_argument("--owner", help="tailnet login allowed in (default: this node's owner)")
     ap.add_argument("--profiles", default=os.path.expanduser("~/.config/spark-console/profiles.json"))
+    ap.add_argument("--journal", default=os.path.expanduser("~/.local/state/spark-console/trial.json"),
+                    help="records an open trial so a restarted server reverts it")
     ap.add_argument("--simulate", action="store_true", help="do not touch hardware; controls change an overlay")
     args = ap.parse_args(argv)
 
@@ -74,7 +76,8 @@ def main(argv=None):
     else:
         run, current = control.sudo_helper, real_current
     ctl = control.Controller(run=run, read_current=current, read_limits=limits, read_persisted=persisted,
-                             trial_s=args.trial)
+                             trial_s=args.trial, journal=None if args.simulate else args.journal)
+    ctl.recover()  # a trial left open by a crash is reverted before anything else
 
     def control_state():
         return {**ctl.status(), "current": current(), "limits": limits(), "simulate": args.simulate,
