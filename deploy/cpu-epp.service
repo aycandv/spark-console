@@ -1,0 +1,13 @@
+# Installed by spark-console. Base unit: EPP 0 (DGX OS default).
+# spark-console's "Keep after reboot" replaces ExecStart with a drop-in in cpu-epp.service.d/.
+[Unit]
+Description=CPU EPP, governor and max frequency (set by spark-console)
+After=nv-cpu-governor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/spark-console-helper cpu-epp 0
+
+[Install]
+WantedBy=multi-user.target

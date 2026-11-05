@@ -10,7 +10,8 @@ import time
 
 from . import control, sampler, server
 
-DEFAULT_LLM = ["http://172.17.0.1:8890", "http://172.17.0.1:8888", "http://127.0.0.1:8889"]
+# Default ports of vLLM, SGLang and llama.cpp server. Use --llm for others.
+DEFAULT_LLM = ["http://127.0.0.1:8000", "http://127.0.0.1:30000", "http://127.0.0.1:8080"]
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
 

@@ -1,5 +1,7 @@
 # spark-console
 
+![spark-console during a trial: the GPU cap and EPP are changed, and each effect readout shows its change and a verdict](.github/screenshot.png)
+
 A small control panel for an NVIDIA DGX Spark (GB10), next to [sparkDash](https://github.com/MiaAI-Lab/sparkDash) which does the monitoring.
 
 - **Controls:** GPU clock cap, CPU max frequency per cluster (X925 / A725), CPU EPP and governor, and profiles that set several at once.
@@ -31,7 +33,7 @@ Requirements:
 
 - A DGX Spark (GB10) with DGX OS or Ubuntu 24.04, Python 3.12, `nvidia-smi`, Tailscale.
 - Sudo access for one step.
-- This repository cloned to `~/projects/spark-console`. The user unit uses that path.
+- A clone of this repository. Do the steps in the clone's directory.
 
 **CAUTION:** Step 1 gives your user password-free root access to the helper. The helper accepts only its listed actions, but read `spark_console/helper.py` before you continue.
 
@@ -43,11 +45,13 @@ Requirements:
 
    The script prints `Installed /usr/local/sbin/spark-console-helper and /etc/sudoers.d/spark-console for user <you>.`
 
+   If `gb10-clocklock.service` or `cpu-epp.service` is not in `/etc/systemd/system`, the script also installs it from `deploy/`, with no GPU cap and EPP 0 (the DGX OS defaults). The script does not replace a unit that is already there.
+
 2. Install and start the user service:
 
    ```sh
    mkdir -p ~/.config/systemd/user
-   cp deploy/spark-console.service ~/.config/systemd/user/
+   sed "s|%h/projects/spark-console|$PWD|" deploy/spark-console.service > ~/.config/systemd/user/spark-console.service
    systemctl --user daemon-reload
    systemctl --user enable --now spark-console
    ```
@@ -65,6 +69,28 @@ Requirements:
 4. Open that URL in a browser on a device in your tailnet.
 
    The header shows a green dot and `LIVE · 1 S`. If the page shows a "Read-only" banner, do step 1 again.
+
+   **Note:** The header links go to sparkDash on port 8443 and to the DGX Dashboard on port 443 of the same tailnet name. They work only if you publish those two dashboards there with `tailscale serve`.
+
+### Read your LLM servers
+
+The console reads decode tokens from the Prometheus `/metrics` of vLLM, SGLang and llama.cpp server (start llama.cpp with `--metrics`). By default it reads `http://127.0.0.1:8000`, `http://127.0.0.1:30000` and `http://127.0.0.1:8080`. Do these steps if your servers use other addresses.
+
+1. Write the addresses into a drop-in for the user service. Use one `--llm` for each server:
+
+   ```sh
+   mkdir -p ~/.config/systemd/user/spark-console.service.d
+   printf '[Service]\nEnvironment="SPARK_CONSOLE_ARGS=--llm http://127.0.0.1:8001 --llm http://127.0.0.1:8002"\n' > ~/.config/systemd/user/spark-console.service.d/llm.conf
+   ```
+
+2. Restart the service:
+
+   ```sh
+   systemctl --user daemon-reload
+   systemctl --user restart spark-console
+   ```
+
+   In **LLM servers**, each server that runs shows its model and decode rate.
 
 ## Use
 
@@ -171,7 +197,7 @@ Do this after a reboot, or after **Re-apply Boot Values**.
 2. Run the client unit tests (needs Node 22):
 
    ```sh
-   node --test tests/web/
+   node --test tests/web/*.test.mjs
    ```
 
    The output shows `fail 0`.
@@ -192,4 +218,6 @@ Do this after a reboot, or after **Re-apply Boot Values**.
 
    The last line is `ui smoke: pass`. The screenshots go to `.shots/`, in the dark and the light theme. An optional fifth argument sets the Chrome debug port (default 9333).
 
-Vendored files and their licenses are listed in `web/vendor/README`.
+## License
+
+MIT, see `LICENSE`. Vendored files and their licenses are listed in `web/vendor/README`.

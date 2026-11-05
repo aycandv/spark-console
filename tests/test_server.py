@@ -31,7 +31,7 @@ class ServerTest(unittest.TestCase):
                                       read_persisted=lambda: {}, clock=Clock(), trial_s=60)
         app = server.App(sampler=FakeSampler(), controller=self.ctl,
                          profiles=control.ProfileStore(str(Path(self.tmp.name) / "p.json")),
-                         owner="owner@github", hostnames={"127.0.0.1", "localhost", "dgx0.example.ts.net"},
+                         owner="owner@github", hostnames={"127.0.0.1", "localhost", "spark.example.ts.net"},
                          web_dir=str(web))
         self.httpd = server.make_server(app, "127.0.0.1", 0)
         self.port = self.httpd.server_address[1]
@@ -99,7 +99,7 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.req("POST", "/api/revert", {}, {"Origin": f"http://127.0.0.1:{self.port}"})[0], 200)
 
     def test_tailnet_identity_must_be_owner(self):
-        tail = {"Host": "dgx0.example.ts.net:9443"}
+        tail = {"Host": "spark.example.ts.net:9443"}
         self.assertEqual(self.req("GET", "/api/state", headers={**tail, "Tailscale-User-Login": "owner@github"})[0], 200)
         self.assertEqual(self.req("GET", "/api/state", headers={**tail, "Tailscale-User-Login": "guest@github"})[0], 403)
 
@@ -135,8 +135,8 @@ class ServerTest(unittest.TestCase):
 
     def test_forwarded_host_from_tailscale_serve_on_unix_socket(self):
         # tailscaled sends Host: localhost and the real name in X-Forwarded-Host when proxying to a socket.
-        fwd = {"Host": "localhost", "X-Forwarded-Host": "dgx0.example.ts.net:9443"}
-        self.assertEqual(self.req("POST", "/api/revert", {}, {**fwd, "Origin": "https://dgx0.example.ts.net:9443"})[0], 200)
+        fwd = {"Host": "localhost", "X-Forwarded-Host": "spark.example.ts.net:9443"}
+        self.assertEqual(self.req("POST", "/api/revert", {}, {**fwd, "Origin": "https://spark.example.ts.net:9443"})[0], 200)
         self.assertEqual(self.req("POST", "/api/revert", {}, {**fwd, "Origin": "https://evil.example"})[0], 403)
         self.assertEqual(self.req("GET", "/api/state", headers={"Host": "localhost", "X-Forwarded-Host": "evil.example"})[0], 403)
 
@@ -183,7 +183,7 @@ class UnixSocketTest(unittest.TestCase):
             ctl = control.Controller(run=m.run, read_current=m.current, read_limits=lambda: LIMITS,
                                      read_persisted=lambda: {}, clock=Clock())
             app = server.App(sampler=FakeSampler(), controller=ctl, profiles=control.ProfileStore(f"{d}/p.json"),
-                             owner="o@gh", hostnames={"dgx0.example.ts.net"}, web_dir=str(web))
+                             owner="o@gh", hostnames={"spark.example.ts.net"}, web_dir=str(web))
             path = f"{d}/run/http.sock"
             httpd = server.make_server(app, f"unix:{path}", 0)
             threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -191,7 +191,7 @@ class UnixSocketTest(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode), 0o700)
                 s = socket.socket(socket.AF_UNIX)
                 s.connect(path)
-                s.sendall(b"GET / HTTP/1.0\r\nHost: dgx0.example.ts.net:9443\r\nTailscale-User-Login: o@gh\r\n\r\n")
+                s.sendall(b"GET / HTTP/1.0\r\nHost: spark.example.ts.net:9443\r\nTailscale-User-Login: o@gh\r\n\r\n")
                 self.assertTrue(s.recv(100).startswith(b"HTTP/1.0 200"))
                 s.close()
             finally:

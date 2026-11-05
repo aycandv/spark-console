@@ -1,10 +1,11 @@
 [Unit]
-Description=spark-console (GPU/CPU control panel for this DGX Spark)
+Description=spark-console (GPU/CPU control panel for a DGX Spark)
 After=network-online.target
 
 [Service]
 WorkingDirectory=%h/projects/spark-console
-ExecStart=/usr/bin/python3 -m spark_console --bind unix:%t/spark-console/http.sock
+# Extra flags (for example --llm URL) come from SPARK_CONSOLE_ARGS in a drop-in; unset means none.
+ExecStart=/usr/bin/python3 -m spark_console --bind unix:%t/spark-console/http.sock $SPARK_CONSOLE_ARGS
 # Only this user (and root's tailscaled) can open the socket.
 RuntimeDirectory=spark-console
 RuntimeDirectoryMode=0700
