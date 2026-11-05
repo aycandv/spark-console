@@ -1,9 +1,9 @@
-"""Builds a fake /sys CPU tree shaped like dgx0 (GB10: 10 x X925 + 10 x A725)."""
+"""Builds a fake /sys CPU tree shaped like a GB10 (10 x X925 + 10 x A725)."""
 from pathlib import Path
 
 X925_MIDR = "0x00000000410fd851"
 A725_MIDR = "0x00000000410fd871"
-# Same split as dgx0: policies 5-9 and 15-19 are X925.
+# Same split as a real GB10: policies 5-9 and 15-19 are X925.
 X925_CPUS = {5, 6, 7, 8, 9, 15, 16, 17, 18, 19}
 
 

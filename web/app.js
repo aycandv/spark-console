@@ -376,7 +376,7 @@ function renderAnnun() {
   a.dataset.kind = kind;
   $("#annun-text").textContent = kind === "sim" ? "Sim" : "Read-only";
   note.innerHTML = kind === "sim" ? "Simulation: controls change an in-memory copy, not the hardware."
-    : "Read-only: the root helper is not installed. Run <code>sudo deploy/install.sh</code> in the repo on dgx0 to enable the controls.";
+    : "Read-only: the root helper is not installed. Run <code>sudo deploy/install.sh</code> in the repo on this machine to enable the controls.";
   if (kind === "ro") $("#apply").setAttribute("aria-describedby", "mode-note");
   else $("#apply").removeAttribute("aria-describedby");
 }

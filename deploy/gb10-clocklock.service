@@ -1,0 +1,14 @@
+# Installed by spark-console. Base unit: no GPU clock cap (DGX OS default).
+# spark-console's "Keep after reboot" replaces ExecStart with a drop-in in gb10-clocklock.service.d/.
+[Unit]
+Description=GB10 GPU clock cap (set by spark-console)
+After=nvidia-persistenced.service
+Wants=nvidia-persistenced.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nvidia-smi -rgc
+
+[Install]
+WantedBy=multi-user.target

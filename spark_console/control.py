@@ -343,9 +343,9 @@ def make_readers(cpu_root="/sys/devices/system/cpu", unit_dir="/etc/systemd/syst
 
 BUILTIN_PROFILES = [
     {"name": "Quiet", "builtin": True, "values": {"gpu_cap_mhz": 1800, "epp": 192},
-     "note": "~86% decode speed at ~47% GPU power (2026-11-04 sweep)"},
+     "note": "lower GPU clock, power-saving EPP"},
     {"name": "Balanced", "builtin": True, "values": {"gpu_cap_mhz": 2100, "epp": 128},
-     "note": "dgx0 default since 2026-11-04"},
+     "note": "GPU cap 2100 MHz, balanced EPP"},
     {"name": "Max", "builtin": True, "values": {"gpu_cap_mhz": None, "epp": 0},
      "note": "no GPU cap, EPP 0 (DGX OS default)"},
 ]

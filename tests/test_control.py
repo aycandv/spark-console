@@ -247,6 +247,10 @@ class ReadersTest(unittest.TestCase):
         p = control.read_persisted(str(self.units))
         self.assertEqual(p, {"gpu_cap_mhz": 2100, "epp": 128})
 
+    def test_shipped_base_units_read_as_dgx_os_defaults(self):
+        deploy = Path(__file__).resolve().parent.parent / "deploy"
+        self.assertEqual(control.read_persisted(str(deploy)), {"gpu_cap_mhz": None, "epp": 0})
+
     def test_persisted_dropins_override_base_units(self):
         d = self.units / "gb10-clocklock.service.d"
         d.mkdir()
