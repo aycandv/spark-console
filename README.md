@@ -31,9 +31,102 @@ Security model:
 
 Requirements:
 
-- A DGX Spark (GB10) with DGX OS or Ubuntu 24.04, Python 3.12, `nvidia-smi`, Tailscale.
-- Sudo access for one step.
-- A clone of this repository. Do the steps in the clone's directory.
+- A DGX Spark (GB10) with DGX OS or Ubuntu 24.04, Python 3.12, git, `nvidia-smi`, and Tailscale logged in to your tailnet.
+- Sudo access.
+
+### Quick install
+
+**CAUTION:** Read `spark_console/helper.py` before you continue. The installer lets your user run this helper as root without a password.
+
+1. Open a terminal on the DGX Spark.
+2. Run the installer:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/aycandv/spark-console/main/install.sh | sh
+   ```
+
+   The installer shows what it will do, then asks `Continue? [y/N]`.
+
+3. Type `y` and press Enter.
+4. If the installer asks for your sudo password, type it and press Enter.
+
+   The last line is the console address, `https://<node>.<tailnet>.ts.net:9443/`.
+
+5. Open that address in a browser on a device in your tailnet.
+
+   The header shows a green dot and `LIVE · 1 S`.
+
+6. If the page shows a "Read-only" banner, do steps 2 to 4 again.
+
+**Note:** With `sh -s -- -y` in place of `sh`, the installer does not ask the question. `SPARK_CONSOLE_DIR` sets a different clone folder.
+
+To read the installer before you run it:
+
+1. Download the installer:
+
+   ```sh
+   curl -fsSLO https://raw.githubusercontent.com/aycandv/spark-console/main/install.sh
+   ```
+
+   The file `install.sh` is in the current folder.
+
+2. Read `install.sh`.
+3. Run the installer:
+
+   ```sh
+   sh install.sh
+   ```
+
+   The installer shows what it will do, then asks `Continue? [y/N]`.
+
+4. Do steps 3 to 6 of the quick install.
+
+To update an installed console:
+
+1. Get the new code:
+
+   ```sh
+   git -C ~/projects/spark-console pull --ff-only
+   ```
+
+   The command prints `Already up to date.`, or `Fast-forward` and the changed files.
+
+2. Run the installer from the clone:
+
+   ```sh
+   sh ~/projects/spark-console/install.sh
+   ```
+
+   The installer asks `Continue? [y/N]`.
+
+3. Type `y` and press Enter.
+4. If the installer asks for your sudo password, type it and press Enter.
+
+   The installer uses the clone, installs the helper again and restarts the service. The last line is the console address.
+
+What the installer does, in this order:
+
+1. It checks for Python 3.12, git, nvidia-smi, systemd and Tailscale, and that Tailscale is logged in. If one is missing, it stops and changes nothing.
+2. It clones https://github.com/aycandv/spark-console to `~/projects/spark-console`. This is the folder that the shipped user unit expects. If the folder exists, the installer uses it and does not overwrite it.
+3. It runs `sudo deploy/install.sh`. That script:
+   - copies `spark_console/helper.py` to `/usr/local/sbin/spark-console-helper`, owned by root.
+   - writes the sudoers rule `/etc/sudoers.d/spark-console` for your user, and checks it with visudo first.
+   - installs `gb10-clocklock.service` and `cpu-epp.service` with no GPU cap and EPP 0, the DGX OS defaults, only if they are not there. It does not replace a unit that is there.
+   - turns on lingering for your user, so the user service runs without an open login session.
+4. It installs the user service `spark-console` and starts it.
+5. It runs `tailscale serve`, which publishes the console on your tailnet over HTTPS on port 9443. If your user may not change the Tailscale settings, it runs `sudo tailscale serve` instead.
+6. It prints the console address.
+
+What the installer never does:
+
+- It does not change a GPU clock, a CPU frequency, an EPP value or a governor. You make each change in the console, as a trial.
+- It does not open a port on your network or the internet. The server listens on a Unix socket, and tailscale serve publishes it to your tailnet only. It does not turn on Funnel.
+- It does not install Python packages. The server uses the Python 3.12 standard library only.
+- It uses sudo for two commands at most: `deploy/install.sh`, and `tailscale serve` if your user may not run it.
+
+### Install step by step
+
+Do these steps in a clone of this repository, in the clone's folder.
 
 **CAUTION:** Step 1 gives your user password-free root access to the helper. The helper accepts only its listed actions, but read `spark_console/helper.py` before you continue.
 
@@ -65,6 +158,8 @@ Requirements:
    ```
 
    The command prints `https://<node>.<tailnet>.ts.net:9443/`.
+
+   If `tailscale serve` stops with an access error, run the command with sudo. To run it without sudo next time, make your user the Tailscale operator: `sudo tailscale set --operator=$USER`.
 
 4. Open that URL in a browser on a device in your tailnet.
 
@@ -171,6 +266,8 @@ Do this after a reboot, or after **Re-apply Boot Values**.
 
 ## Uninstall
 
+Do these steps in the folder of your clone (`~/projects/spark-console` after the quick install).
+
 1. Remove the helper, the sudoers rule and the boot drop-ins:
 
    ```sh
@@ -183,6 +280,8 @@ Do this after a reboot, or after **Re-apply Boot Values**.
    systemctl --user disable --now spark-console
    tailscale serve --https=9443 off
    ```
+
+**Note:** The clone stays in its folder, and lingering stays on for your user.
 
 ## Develop
 
