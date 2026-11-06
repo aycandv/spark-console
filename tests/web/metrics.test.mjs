@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   edges, classIdx, bandText, classNow, classTrial, trialStart, delta, honesty, loadScale, SCALE_DEFAULT,
-  trialDelta, trialOutcome, validScale,
+  trialDelta, trialOutcome, validScale, linkState, notSaved, revertReason, errorText,
 } from "../../web/metrics.js";
 
 // A history like the client's H: one sample per second.
@@ -192,4 +192,43 @@ test("validScale rejects values that overflow", () => {
   assert.ok(!validScale(1e308, 1.41, 5));
   assert.ok(!validScale(0.25, 1e100, 5));
   assert.ok(!validScale(0.25, 1.41, Infinity));
+});
+
+test("linkState: connecting, lost, stale and live", () => {
+  assert.equal(linkState({ open: null, age: 1 }), "connecting");
+  assert.equal(linkState({ open: false, age: 1 }), "lost");
+  assert.equal(linkState({ open: true, age: null }), "stale");
+  assert.equal(linkState({ open: true, age: 5 }), "live");
+  assert.equal(linkState({ open: true, age: 5.1 }), "stale");
+});
+
+test("notSaved compares the running value with the boot value", () => {
+  const limits = { x925: [1000000, 3900000], a725: [1000000, 2808000] };
+  assert.equal(notSaved("epp", 192, { epp: 192 }), false, "equal");
+  assert.equal(notSaved("gpu_cap_mhz", 2000, { gpu_cap_mhz: 2100 }), true, "different");
+  assert.equal(notSaved("gpu_cap_mhz", null, {}), false, "no clocklock line: no cap at boot");
+  assert.equal(notSaved("gpu_cap_mhz", 2000, {}), true, "a cap that boot does not set");
+  assert.equal(notSaved("x925_max_khz", 3900000, {}, limits), false, "CPU max absent: hardware max at boot");
+  assert.equal(notSaved("x925_max_khz", 3000000, {}, limits), true, "CPU max below the hardware max");
+  assert.equal(notSaved("epp", 192, {}), false, "EPP boot value unknown");
+  assert.equal(notSaved("governor", "ondemand", {}), false, "governor boot value unknown");
+});
+
+test("revertReason turns event codes into words", () => {
+  assert.equal(revertReason({ kind: "reverted", why: "timeout" }), "not kept in time");
+  assert.equal(revertReason({ kind: "reverted", why: "user" }), "");
+  assert.equal(revertReason({ kind: "reverted", why: "shutdown" }), "the server stopped");
+  assert.equal(revertReason({ kind: "reverted", why: "recovered after restart" }), "the server restarted");
+  assert.equal(revertReason({ kind: "trial_dropped_by_reboot" }), "a reboot ended the trial");
+  assert.equal(revertReason(undefined), "the server restarted");
+  assert.equal(revertReason({ kind: "reverted", why: "odd" }), "odd");
+});
+
+test("errorText names the console server or the helper", () => {
+  const net = /console server did not answer/;
+  assert.match(errorText(new TypeError("Failed to fetch"), "keep"), net);
+  assert.match(errorText({ status: 502, message: "HTTP 502" }, "keep"), net, "a proxy 502 has no server error body");
+  assert.equal(errorText({ status: 502, server: true, message: "helper failed: no sudo" }, "keep-boot"),
+    "Kept until reboot; saving for boot failed: no sudo.");
+  assert.equal(errorText({ status: 409, server: true, message: "a trial is open" }, "apply"), "A trial is already open: Keep or Revert it first.");
 });

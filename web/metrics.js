@@ -1,4 +1,5 @@
-/* Pure trial-evidence and energy-class maths. No DOM: unit-tested with node --test (tests/web/).
+/* Pure client logic (no DOM): trial evidence, energy classes, link state and message text.
+   Unit-tested with node --test (tests/web/).
    H is the client history: { t: [seconds], cols: { key: [value|null] } }. */
 
 export const LETTERS = "ABCDEFG";
@@ -160,4 +161,43 @@ export function trialOutcome(events) {
   if (ev?.kind !== "kept") return { kind: "reverted", ev, boot: null };
   const next = events.slice(i + 1).find((e) => e.kind === "persisted" || e.kind === "persist_failed");
   return { kind: "kept", ev, boot: next ? (next.kind === "persisted" ? "saved" : "failed") : null };
+}
+
+/* The live link: connecting (never opened), lost (stream error), stale (open, data over 5 s old) or live. */
+export function linkState({ open, age }) {
+  if (open === null) return "connecting";
+  if (!open) return "lost";
+  return age == null || age > 5 ? "stale" : "live";
+}
+
+/* True when a running value differs from what the boot units set. Without a drop-in, boot sets no GPU cap and
+   the hardware max for a CPU cluster; the EPP and governor defaults are unknown, so they never count. */
+export function notSaved(knob, cur, persisted = {}, limits = {}) {
+  let boot;
+  if (persisted && knob in persisted) boot = persisted[knob];
+  else if (knob === "gpu_cap_mhz") boot = null;
+  else if (knob.endsWith("_max_khz")) boot = limits?.[knob.split("_")[0]]?.[1];
+  if (boot === undefined || cur === undefined) return false;
+  return cur !== boot;
+}
+
+/* Why a trial ended without Keep, in words ("" for Revert now). */
+const WHY = { timeout: "not kept in time", user: "", shutdown: "the server stopped", "recovered after restart": "the server restarted" };
+export function revertReason(ev) {
+  if (!ev) return "the server restarted"; // the trial is gone and the new server logged nothing about it
+  if (ev.kind === "trial_dropped_by_reboot") return "a reboot ended the trial";
+  return ev.why in WHY ? WHY[ev.why] : ev.why || "";
+}
+
+/* A failed POST in words. e.server: the console server answered with an error body; without it the request
+   got no answer from the server (fetch failed, or the proxy answered for it). The state differs per action. */
+export function errorText(e, action) {
+  if (!e.server) return "The console server did not answer. An open trial still reverts on time. Wait for Live, then try again.";
+  if (e.status === 409 && action === "apply") return "A trial is already open: Keep or Revert it first.";
+  if (e.status !== 502) return `Failed: ${e.message}`;
+  const why = e.message.replace(/^helper failed: /, "");
+  if (action === "apply") return `The root helper failed: ${why}. The old values are still set.`;
+  if (action === "keep-boot") return `Kept until reboot; saving for boot failed: ${why}.`;
+  if (action === "revert") return `Revert failed: ${why}. The trial values are still set; the server retries.`;
+  return `The root helper failed: ${why}.`;
 }
