@@ -1,6 +1,8 @@
 """install.sh against stub commands: a temporary HOME and a PATH with stubs plus the few real tools it needs."""
 import os
+import pty
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -36,13 +38,18 @@ class InstallTest(unittest.TestCase):
         for name, body in STUBS.items():
             self.stub(name, f'printf "%s\\n" "{name} $*" >> "$STUB_LOG"\n{body}')
         self.stub("uname", 'echo "Linux ${STUB_ARCH:-aarch64}"')
+        self.stub("sleep", "")
         for tool in ("sh", "mkdir", "sed", "id"):
             (self.tools / tool).symlink_to(shutil.which(tool))
         (self.tools / "python3").symlink_to(sys.executable)
         self.logfile = root / "log"
         self.logfile.touch()
         self.clone = self.home / "projects/spark-console"
-        self.sock = f"unix:{self.run_dir}/spark-console/http.sock"
+        self.sock_path = self.run_dir / "spark-console/http.sock"
+        self.sock = f"unix:{self.sock_path}"
+        self.sock_path.parent.mkdir()
+        with socket.socket(socket.AF_UNIX) as s:  # stands for the started server, which install.sh waits for
+            s.bind(str(self.sock_path))
         self.repo_url = REPO.as_uri()
 
     def tearDown(self):
@@ -53,12 +60,27 @@ class InstallTest(unittest.TestCase):
         path.write_text(f"#!/bin/sh\n{body}\n")
         path.chmod(0o755)
 
+    def env(self, **env):
+        return {"HOME": str(self.home), "PATH": f"{self.stubs}:{self.tools}", "XDG_RUNTIME_DIR": str(self.run_dir),
+                "STUB_LOG": str(self.logfile), "SPARK_CONSOLE_REPO": self.repo_url, **env}
+
     def install(self, *args, **env):
-        env = {"HOME": str(self.home), "PATH": f"{self.stubs}:{self.tools}", "XDG_RUNTIME_DIR": str(self.run_dir),
-               "STUB_LOG": str(self.logfile), "SPARK_CONSOLE_REPO": self.repo_url, **env}
         # A new session has no controlling terminal, so a prompt on /dev/tty cannot block the test.
-        return subprocess.run([shutil.which("sh"), str(SCRIPT), *args], env=env, capture_output=True, text=True,
-                              timeout=60, start_new_session=True)
+        return subprocess.run([shutil.which("sh"), str(SCRIPT), *args], env=self.env(**env), capture_output=True,
+                              text=True, timeout=60, start_new_session=True)
+
+    def piped(self, script, answer):
+        """Run the script as curl | sh does: the script on stdin, the answer typed ahead on a terminal."""
+        master, slave = pty.openpty()
+        tty = os.ttyname(slave)
+        try:
+            os.write(master, answer + b"\n")
+            # Opening the tty in a new session makes it the controlling terminal, which /dev/tty names.
+            return subprocess.run([shutil.which("sh")], input=script, env=self.env(), capture_output=True, timeout=60,
+                                  start_new_session=True, preexec_fn=lambda: os.close(os.open(tty, os.O_RDWR)))
+        finally:
+            os.close(master)
+            os.close(slave)
 
     def log(self):
         return self.logfile.read_text().splitlines()
@@ -131,6 +153,39 @@ class InstallTest(unittest.TestCase):
         (self.clone / "notes.txt").write_text("mine\n")
         self.assert_refused(self.install("-y"))
         self.assertEqual([f.name for f in self.clone.iterdir()], ["notes.txt"])
+
+    def test_folder_with_characters_that_break_the_unit_stops(self):
+        for name in ("R&D", "a|b", "100%", "back\\slash"):
+            with self.subTest(name):
+                self.assert_refused(self.install("-y", SPARK_CONSOLE_DIR=str(self.home / name / "spark-console")))
+
+    def test_folder_of_another_user_stops(self):
+        p = self.install("-y", SPARK_CONSOLE_DIR="/")
+        self.assert_refused(p)
+        self.assertIn("is not owned by you", p.stderr)
+
+    def test_service_that_does_not_start_stops_before_serve(self):
+        self.sock_path.unlink()
+        p = self.install("-y")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(p.stderr.splitlines()[-1], "spark-console did not start. Read: journalctl --user -u spark-console")
+        self.assertFalse(any(line.startswith("tailscale serve") for line in self.log()))
+
+    def test_piped_script_reads_the_answer_on_the_terminal(self):
+        p = self.piped(SCRIPT.read_bytes(), b"n")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(p.stderr, b"Stopped. Nothing changed.\n")
+        self.assertEqual(self.log(), self.expected_log()[:2])
+        self.logfile.write_text("")
+        p = self.piped(SCRIPT.read_bytes(), b"y")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.log(), self.expected_log())
+
+    def test_partial_download_runs_nothing(self):
+        script = SCRIPT.read_bytes()
+        p = self.piped(script[:script.rstrip(b"\n").rindex(b"\n") + 1], b"y")  # without the last line
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.log(), [])
 
     def test_no_terminal_and_no_yes_stops(self):
         self.assert_refused(self.install())

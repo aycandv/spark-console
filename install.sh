@@ -32,8 +32,14 @@ main() {
     repo=${SPARK_CONSOLE_REPO:-https://github.com/aycandv/spark-console}
     dir=${SPARK_CONSOLE_DIR:-$HOME/projects/spark-console}
     case $dir in /*) ;; *) die "SPARK_CONSOLE_DIR must be an absolute path, not $dir." ;; esac
+    # The path goes into a sed replacement and a systemd unit, where & | \ and % have a meaning.
+    case $dir in *[!A-Za-z0-9._@/-]*) die "SPARK_CONSOLE_DIR may use only letters, digits, . _ @ - and /, not $dir." ;; esac
+    # Its deploy/install.sh runs as root, so a folder that another user owns must not be used.
+    [ ! -e "$dir" ] || python3 -c 'import os, sys; sys.exit(os.stat(sys.argv[1]).st_uid != os.getuid())' "$dir" ||
+        die "$dir is not owned by you. Move it away or set SPARK_CONSOLE_DIR."
     unit_dir=$HOME/.config/systemd/user
-    set -- --bg --https=9443 "unix:$XDG_RUNTIME_DIR/spark-console/http.sock" # the tailscale serve arguments
+    sock=$XDG_RUNTIME_DIR/spark-console/http.sock
+    set -- --bg --https=9443 "unix:$sock" # the tailscale serve arguments
     if [ -e "$dir" ] && [ ! -f "$dir/deploy/install.sh" ]; then
         die "$dir exists but is not a spark-console clone. Move it away or set SPARK_CONSOLE_DIR."
     fi
@@ -66,6 +72,12 @@ main() {
     systemctl --user daemon-reload
     systemctl --user try-restart spark-console # a re-run loads the new code
     systemctl --user enable --now spark-console
+    i=0 # enable --now exits 0 even if the server crashes at once; the socket shows that it runs
+    until [ -S "$sock" ]; do
+        i=$((i + 1))
+        [ "$i" -le 30 ] || die "spark-console did not start. Read: journalctl --user -u spark-console"
+        sleep 1
+    done
 
     if ! tailscale serve "$@"; then
         echo "tailscale serve needs sudo for your user. To skip sudo next time: sudo tailscale set --operator=\$USER"

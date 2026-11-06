@@ -48,14 +48,15 @@ Requirements:
    The installer shows what it will do, then asks `Continue? [y/N]`.
 
 3. Type `y` and press Enter.
+4. If the installer asks for your sudo password, type it and press Enter.
 
-   The installer asks for your sudo password. The last line is the console address, `https://<node>.<tailnet>.ts.net:9443/`.
+   The last line is the console address, `https://<node>.<tailnet>.ts.net:9443/`.
 
-4. Open that address in a browser on a device in your tailnet.
+5. Open that address in a browser on a device in your tailnet.
 
    The header shows a green dot and `LIVE · 1 S`.
 
-5. If the page shows a "Read-only" banner, do steps 2 and 3 again.
+6. If the page shows a "Read-only" banner, do steps 2 to 4 again.
 
 **Note:** With `sh -s -- -y` in place of `sh`, the installer does not ask the question. `SPARK_CONSOLE_DIR` sets a different clone folder.
 
@@ -78,7 +79,7 @@ To read the installer before you run it:
 
    The installer shows what it will do, then asks `Continue? [y/N]`.
 
-4. Do steps 3 to 5 of the quick install.
+4. Do steps 3 to 6 of the quick install.
 
 To update an installed console:
 
@@ -87,6 +88,8 @@ To update an installed console:
    ```sh
    git -C ~/projects/spark-console pull --ff-only
    ```
+
+   The command prints `Already up to date.`, or `Fast-forward` and the changed files.
 
 2. Run the installer from the clone:
 
@@ -97,6 +100,7 @@ To update an installed console:
    The installer asks `Continue? [y/N]`.
 
 3. Type `y` and press Enter.
+4. If the installer asks for your sudo password, type it and press Enter.
 
    The installer uses the clone, installs the helper again and restarts the service. The last line is the console address.
 
