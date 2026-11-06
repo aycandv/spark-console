@@ -54,9 +54,9 @@ Requirements:
 
 5. Open that address in a browser on a device in your tailnet.
 
-   The header shows a green dot and `LIVE · 1 S`.
+   The header shows a green dot and `Live · 1 s`.
 
-6. If the page shows a "Read-only" banner, do steps 2 to 4 again.
+6. If the bar under the header starts with "Read-only", do steps 2 to 4 again.
 
 **Note:** With `sh -s -- -y` in place of `sh`, the installer does not ask the question. `SPARK_CONSOLE_DIR` sets a different clone folder.
 
@@ -163,7 +163,7 @@ Do these steps in a clone of this repository, in the clone's folder.
 
 4. Open that URL in a browser on a device in your tailnet.
 
-   The header shows a green dot and `LIVE · 1 S`. If the page shows a "Read-only" banner, do step 1 again.
+   The header shows a green dot and `Live · 1 s`. If the bar under the header starts with "Read-only", do step 1 again.
 
    **Note:** The header links go to sparkDash on port 8443 and to the DGX Dashboard on port 443 of the same tailnet name. They work only if you publish those two dashboards there with `tailscale serve`.
 
@@ -227,7 +227,7 @@ To change the scale, click **Edit scale** in the drawer. The scale is kept in th
 
 ### Themes and shortcuts
 
-To change the theme, click **Auto**, **Dark** or **Light** in the header. **Auto** follows the operating system.
+To change the theme, click **Auto**, **Dark** or **Light** at the bottom of the page. **Auto** follows the operating system.
 
 | Key | Action |
 |---|---|
