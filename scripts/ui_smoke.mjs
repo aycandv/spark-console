@@ -124,6 +124,8 @@ try {
 
   // --- guard: never point this at the live service ---
   check(await evaluate(`fetch("api/state").then((r) => r.json()).then((s) => s.control?.simulate === true)`), "server runs in simulate mode");
+  const denied = await fetch(url); // Node: no owner header
+  check(denied.status === 403 && /^text\/html/.test(denied.headers.get("content-type")) && /only for its owner/.test(await denied.text()), "a non-owner gets a 403 page, not JSON");
 
   // --- base checks and the dark theme ---
   check(await evaluate(`document.querySelector("#link").dataset.state === "live" && document.documentElement.dataset.link === "live"`), "live stream connected");
