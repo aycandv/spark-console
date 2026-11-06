@@ -101,10 +101,13 @@ const resolvedTheme = () => {
 };
 function refreshColors() {
   if (!probe) { probe = document.createElement("span"); probe.hidden = true; document.body.append(probe); }
-  for (const [k, v] of Object.entries({ ink: "--ink", ink2: "--ink-2", ink3: "--ink-3", amber: "--amber-edge", amberText: "--amber-text", well: "--well" })) {
+  for (const [k, v] of Object.entries({ ink: "--ink", ink2: "--ink-2", ink3: "--ink-3", amber: "--amber-edge", amberText: "--amber-text" })) {
     probe.style.color = `var(${v})`;
     C[k] = getComputedStyle(probe).color;
   }
+  // A surface, so read it as one: forced colours map a background to Canvas (a text colour would be CanvasText).
+  probe.style.backgroundColor = "var(--well)";
+  C.well = getComputedStyle(probe).backgroundColor;
 }
 function themeChanged() {
   refreshColors();
@@ -153,10 +156,10 @@ function drawOverlay(u, chart) {
     }
   }
   if (chart.labels && u.data[0].length) {
-    ctx.font = `500 ${11 * px}px "Plex Cond", "Arial Narrow", sans-serif`;
+    ctx.font = `500 ${12 * px}px "Plex Cond", "Arial Narrow", sans-serif`;
     // Text on a small plate of the well colour, so it never sits on a line.
     const label = (text, x, y, align, base, color) => {
-      const w = ctx.measureText(text).width, h = 13 * px, pad = 3 * px;
+      const w = ctx.measureText(text).width, h = 14 * px, pad = 3 * px;
       const x0 = align === "right" ? x - w : x, y0 = base === "top" ? y : y - h;
       ctx.fillStyle = C.well;
       ctx.fillRect(x0 - pad, y0, w + 2 * pad, h);
@@ -168,15 +171,14 @@ function drawOverlay(u, chart) {
     const { min, max } = u.scales.y;
     const step = max - min > 400 ? 50 : max - min > 40 ? 10 : 1;
     const r = (v) => fmt(Math.max(0, Math.round(v / step) * step)); // MHz never goes below 0
-    label(r(max), left + 5 * px, top + 3 * px, "left", "top", C.ink3);
-    label(r(min), left + 5 * px, top + height - 3 * px, "left", "bottom", C.ink3);
     const sp = u.data[2];
     const v = sp ? sp[sp.length - 1] : null;
-    if (v != null) {
-      const y = u.valToPos(v, "y", true);
-      const above = y - top > 18 * px;
-      label(`${chart.capWord} ${fmt(v)}`, left + width - 5 * px, above ? y - 2 * px : y + 2 * px, "right", above ? "bottom" : "top", knobInTrial(chart.knob) ? C.amberText : C.ink3);
-    }
+    const y = v == null ? null : u.valToPos(v, "y", true);
+    const above = y != null && y - top > 18 * px;
+    // The setpoint label at the top already names the top of the scale: skip the max label then.
+    if (y == null || (above ? y - 16 * px : y) - top > 16 * px) label(r(max), left + 5 * px, top + 3 * px, "left", "top", C.ink3);
+    label(r(min), left + 5 * px, top + height - 3 * px, "left", "bottom", C.ink3);
+    if (v != null) label(`${chart.capWord} ${fmt(v)}`, left + width - 5 * px, above ? y - 2 * px : y + 2 * px, "right", above ? "bottom" : "top", knobInTrial(chart.knob) ? C.amberText : C.ink3);
   }
   ctx.restore();
 }
@@ -194,7 +196,8 @@ function makeChart(el, series, { unit = "", digits = 0, pad = 0.15, labels = fal
       x: { time: true },
       y: { range: (u, lo, hi) => {
         if (lo == null || hi == null) return [0, 1];
-        const span = Math.max(hi - lo, Math.abs(hi) * 0.05, 1);
+        // Labelled MHz traces: at least a 15 % span, so ±10 MHz of jitter does not fill the well.
+        const span = Math.max(hi - lo, Math.abs(hi) * (labels ? 0.15 : 0.05), 1);
         return [lo - span * pad, hi + span * pad];
       } },
     },
@@ -522,21 +525,22 @@ function eventText(e) {
 }
 
 /* --- render: channels ----------------------------------------------------------------------------------------------------------- */
+/* [reason, short visible label, level, full name for screen readers] */
 const LAMPS_GPU = [
-  ["sw_power_cap", "Pwr cap", "serious"], ["sw_thermal_slowdown", "SW therm", "serious"],
-  ["hw_thermal_slowdown", "HW therm", "crit"], ["hw_slowdown", "HW slow", "crit"],
-  ["hw_power_brake_slowdown", "Pwr brake", "crit"], ["gpu_idle", "Idle", "info"],
+  ["sw_power_cap", "Pwr cap", "serious", "Power cap"], ["sw_thermal_slowdown", "SW therm", "serious", "Software thermal slowdown"],
+  ["hw_thermal_slowdown", "HW therm", "crit", "Hardware thermal slowdown"], ["hw_slowdown", "HW slow", "crit", "Hardware slowdown"],
+  ["hw_power_brake_slowdown", "Pwr brake", "crit", "Power brake slowdown"], ["gpu_idle", "Idle", "info", "Idle"],
 ];
 function renderLamps(ul, list) {
   if (ul.children.length !== list.length) {
-    ul.innerHTML = list.map(() => '<li class="lamp" data-on=""><span data-l></span><span class="sr-only" data-s></span></li>').join("");
+    ul.innerHTML = list.map(() => '<li class="lamp" data-on=""><span data-l aria-hidden="true"></span><span class="sr-only" data-s></span></li>').join("");
   }
-  list.forEach(([on, label, level], i) => {
+  list.forEach(([on, label, level, full], i) => {
     const li = ul.children[i];
     const v = on ? level : "";
     if (li.dataset.on !== v) li.dataset.on = v;
     setText($("[data-l]", li), label);
-    setText($("[data-s]", li), on ? ", active" : ", off");
+    setText($("[data-s]", li), `${full || label}, ${on ? "active" : "off"}`);
   });
   ul.dataset.none = list.every(([on]) => !on) ? "1" : "0";
 }
@@ -792,6 +796,7 @@ function patchRows(tbody, rows, cls = []) {
 }
 function setSum(id, text, alarm) {
   setHTML($(`${id} [data-sum]`), `${alarm ? `<span class="chip chip-alarm">${esc(alarm)}</span>` : ""}<span>${esc(text)}</span>`);
+  setText($(`${id} [data-alarm]`), alarm ? `, ${alarm}` : "");
 }
 function renderCores(s) {
   const box = $("#cores");
@@ -869,7 +874,8 @@ function renderActivity(ev) {
   });
 }
 let procStatusT;
-function renderProcs() {
+/* announce: the filter or the tree changed (a user action); the 1 Hz render never speaks */
+function renderProcs(announce = false) {
   const q = $("#proc-filter").value.trim().toLowerCase();
   let rows = S.snap.procs.filter((p) => !q || p.comm.toLowerCase().includes(q) || String(p.pid).startsWith(q));
   const key = S.sort;
@@ -893,6 +899,7 @@ function renderProcs() {
   else patchRows(body, rows.slice(0, 200).map((p) => [p.pid,
     { t: `${depth.get(p.pid) ? "└ " : ""}${p.comm}`, cls: "name", pad: 8 + 14 * (depth.get(p.pid) || 0), title: p.comm, translate: false },
     fmt(p.cpu, 1), fmt(p.rss_mib), p.gpu_mib == null ? "" : fmt(p.gpu_mib), p.state]), ["num", "", "num", "num", "num", ""]);
+  if (!announce) return;
   clearTimeout(procStatusT);
   procStatusT = setTimeout(() => setText($("#proc-status"), q ? `${rows.length} of ${S.snap.procs.length} processes match` : ""), 300);
 }
@@ -936,13 +943,13 @@ function render(tick = true) {
   const reasons = new Set(g.reasons || []);
   renderChannel("#ch-gpu", "gpu_cap_mhz", g.sm_mhz,
     s.gpu ? `${fmt(g.util)} % busy · ${fmt(g.power_w, 1)} W · headroom ${fmt(g.tlimit_c)} °C` : s.gpu_error || "no GPU data",
-    [300, 3100], LAMPS_GPU.map(([k, l, lvl]) => [reasons.has(k), l, lvl]));
+    [300, 3100], LAMPS_GPU.map(([k, l, lvl, full]) => [reasons.has(k), l, lvl, full]));
   for (const k of ["x925", "a725"]) {
     const cl = s.cpu.clusters[k] || {};
     const r = lim[k] || [0, 0];
     renderChannel(`#ch-${k}`, `${k}_max_khz`, cl.mhz, `${fmt(cl.util)} % busy · ${cl.cores ?? 0} cores`,
       [Math.ceil(r[0] / 1000), Math.floor(r[1] / 1000)],
-      [[cl.perf_limited > 0, cl.perf_limited > 0 ? `Perf limited · ${cl.perf_limited}` : "Perf limited", "serious"]]);
+      [[cl.perf_limited > 0, cl.perf_limited > 0 ? `Perf limited · ${cl.perf_limited}` : "Perf limited", "serious", "Performance limited"]]);
   }
   renderPolicy();
   renderProfiles();
@@ -1076,14 +1083,15 @@ function bind() {
     if (b) setTheme(b.dataset.themeSet);
   });
   darkMQ.addEventListener("change", themeChanged);
+  matchMedia("(forced-colors: active)").addEventListener("change", themeChanged);
   $("#keys-switch").addEventListener("click", () => setKeys(!S.keys));
   document.addEventListener("keydown", onKey);
   $("#reset-stats").addEventListener("click", () => post("api/stats/reset", {}, "stats").catch(() => {}));
   $("#reapply-boot").addEventListener("click", () => {
     if (confirm("Restart nv-cpu-governor, gb10-clocklock and cpu-epp now? Clocks and EPP go back to their boot values.")) post("api/reapply-boot", {}, "boot").catch(() => {});
   });
-  $("#proc-filter").addEventListener("input", () => S.snap && renderProcs());
-  $("#proc-tree").addEventListener("change", () => S.snap && renderProcs());
+  $("#proc-filter").addEventListener("input", () => S.snap && renderProcs(true));
+  $("#proc-tree").addEventListener("change", () => S.snap && renderProcs(true));
   $$(".sort").forEach((b) => b.addEventListener("click", () => {
     S.sort = b.dataset.sort;
     $$("#d-procs th").forEach((th) => th.removeAttribute("aria-sort"));

@@ -244,37 +244,46 @@ export function initEnergy({ fmt, signed, announce, reduced, glide, crossfade, o
   aside.addEventListener("pointercancel", endDrag);
 
   /* --- scale dialog ------------------------------------------------------------------------------------------------------- */
-  const dlg = $("#scale-dialog"), fa = $("#sc-a"), fr = $("#sc-r"), fm = $("#sc-min");
-  // Same rule as a stored scale (metrics.js), per field so the bad one can be marked.
+  const dlg = $("#scale-dialog"), fa = $("#sc-a"), fr = $("#sc-r"), fm = $("#sc-min"), err = $("#scale-error");
+  // Same rule as a stored scale (metrics.js), per field so the bad one can be marked and named.
   const bad = () => {
     const a = Number(fa.value), r = Number(fr.value), m = Number(fm.value);
-    const out = [];
-    if (fa.value === "" || !(a > 0 && Number.isFinite(a))) out.push(fa);
-    if (fr.value === "" || !(r > 1 && Number.isFinite(r))) out.push(fr);
-    if (fm.value === "" || !(m >= 0 && Number.isFinite(m))) out.push(fm);
-    if (!out.length && !validScale(a, r, m)) out.push(fa, fr);
+    const out = new Map();
+    if (fa.value === "" || !(a > 0 && Number.isFinite(a))) out.set(fa, "Class A must end above 0.");
+    if (fr.value === "" || !(r > 1 && Number.isFinite(r))) out.set(fr, "The step factor must be above 1.");
+    if (fm.value === "" || !(m >= 0 && Number.isFinite(m))) out.set(fm, "The decode minimum must be 0 or more.");
+    if (!out.size && !validScale(a, r, m)) out.set(fa, "The top band is too large. Use a smaller class A end or step factor.").set(fr, "");
     return out;
   };
-  const valid = () => !bad().length;
+  // While typing: the preview only. A shown error follows the fix, so it clears as soon as the value is good.
   const preview = () => {
     const b = bad();
-    const s = b.length ? scale : { a: Number(fa.value), r: Number(fr.value), min: Number(fm.value) };
+    const s = b.size ? scale : { a: Number(fa.value), r: Number(fr.value), min: Number(fm.value) };
     setHTML($("#scale-preview"), [...LETTERS].map((L, k) => `<tr><th scope="row"><span class="band-tag" data-k="${k}" style="background:var(--band)">${L}</span></th><td class="num">${esc(bandText(k, s))}</td></tr>`).join(""));
-    $("#scale-error").hidden = !b.length;
-    for (const x of [fa, fr, fm]) x.setAttribute("aria-invalid", String(b.includes(x)));
+    if (!err.hidden) showError();
     return b;
   };
+  function showError() {
+    const b = bad();
+    setText(err, [...b.values()].filter(Boolean).join(" "));
+    err.hidden = !b.size;
+    for (const x of [fa, fr, fm]) x.setAttribute("aria-invalid", String(b.has(x)));
+    return [...b.keys()];
+  }
   $("#edit-scale").addEventListener("click", () => {
     fa.value = scale.a; fr.value = scale.r; fm.value = scale.min;
+    err.hidden = true;
+    for (const x of [fa, fr, fm]) x.setAttribute("aria-invalid", "false");
     preview();
     dlg.showModal();
   });
-  for (const x of [fa, fr, fm]) x.addEventListener("input", preview);
+  for (const x of [fa, fr, fm]) { x.addEventListener("input", preview); x.addEventListener("change", showError); }
   $("#scale-form").addEventListener("submit", (e) => {
     const v = e.submitter?.value;
     if (v === "reset") scale = { ...SCALE_DEFAULT };
     else if (v === "save") {
-      if (!valid()) { e.preventDefault(); preview()[0].focus(); return; }
+      const b = showError();
+      if (b.length) { e.preventDefault(); b[0].focus(); return; }
       scale = { a: Number(fa.value), r: Number(fr.value), min: Number(fm.value) };
     } else return;
     buildLadder();
