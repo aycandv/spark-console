@@ -17,7 +17,7 @@ const port = Number(process.argv[5] || process.env.CDP_PORT || 9333);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 mkdirSync(out, { recursive: true });
 
-const chrome = spawn("google-chrome", ["--headless=new", "--disable-gpu", "--hide-scrollbars", `--remote-debugging-port=${port}`,
+const chrome = spawn("google-chrome", ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--password-store=basic", `--remote-debugging-port=${port}`,
   `--user-data-dir=${mkdtempSync(join(tmpdir(), "ui-smoke-"))}`, "about:blank"], { stdio: "ignore" });
 let ws, id = 0;
 const pending = new Map();
