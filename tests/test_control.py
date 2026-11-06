@@ -298,5 +298,19 @@ class ProfilesTest(unittest.TestCase):
                 again.save("Ok", {"fan": 1})
 
 
+
+class SimulatedTest(unittest.TestCase):
+    def test_persist_commands_change_the_boot_values(self):
+        from spark_console.__main__ import Simulated
+        sim = Simulated(lambda: {"gpu_cap_mhz": 2100}, lambda: {"gpu_cap_mhz": 2100, "epp": 0})
+        sim.run(["persist-gpu", "2000"])
+        self.assertEqual(sim.persisted()["gpu_cap_mhz"], 2000)
+        sim.run(["persist-gpu", "none"])
+        self.assertIsNone(sim.persisted()["gpu_cap_mhz"])
+        sim.run(["persist-cpu", "192", "3000000", "2500000", "powersave"])
+        self.assertEqual(sim.persisted(), {"gpu_cap_mhz": None, "epp": 192, "x925_max_khz": 3000000,
+                                           "a725_max_khz": 2500000, "governor": "powersave"})
+        self.assertEqual(sim.current(), {"gpu_cap_mhz": 2100}, "persisting does not change the running values")
+
 if __name__ == "__main__":
     unittest.main()

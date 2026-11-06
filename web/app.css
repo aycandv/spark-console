@@ -152,6 +152,10 @@ kbd { font: 500 var(--t-11)/1 "Plex Cond", sans-serif; letter-spacing: 0.04em; p
 .commit-second { margin-top: var(--s2); color: var(--ink-2); }
 .commit-second b { color: var(--amber-text); font-weight: 600; }
 .commit-error { color: var(--lamp-serious); margin-top: var(--s2); }
+/* read-only: the banner the README promises, with the annunciator's mark */
+.commit[data-ro][data-mode="idle"] .commit-text { color: var(--ink); display: block; }
+.commit[data-ro][data-mode="idle"] .commit-text::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--lamp-serious); margin-right: var(--s2); vertical-align: 1px; }
+.commit-text code { font: inherit; font-weight: 600; }
 .staged-count { color: var(--amber-text); font-size: var(--t-16); font-weight: 600; white-space: nowrap; }
 .countdown { font-size: var(--t-28); font-weight: 600; line-height: 1; color: var(--amber-text); letter-spacing: -0.01em; min-width: 2.6ch; }
 /* urgent (10 s or less): more weight inside amber, never red; the negative margin keeps the digits in place */
@@ -292,9 +296,12 @@ html:is([data-link="stale"], [data-link="lost"]) :is(.read-val, .read-sub, .trac
   width: 40px; height: 40px; border-radius: var(--r-ctl); border: 1px solid var(--ctl-edge); background: var(--bezel); color: var(--ink);
   font-size: var(--t-18); cursor: pointer; user-select: none; transition: transform 100ms var(--ease), background-color 120ms var(--ease);
 }
-.step:hover:not(:disabled) { background: color-mix(in srgb, var(--bezel), var(--ink) 6%); }
-.step:active:not(:disabled) { transform: scale(0.95); }
-.step:disabled { color: var(--ink-4); border-color: var(--rule-strong); cursor: not-allowed; }
+.step:hover:not([aria-disabled="true"]) { background: color-mix(in srgb, var(--bezel), var(--ink) 6%); }
+.step:active:not([aria-disabled="true"]) { transform: scale(0.95); }
+.step[aria-disabled="true"] { color: var(--ink-4); border-color: var(--rule-strong); cursor: not-allowed; }
+/* read-only: the stops and profiles keep their marks, but read as off */
+.epp-stops button[aria-disabled="true"], .pf-btn[aria-disabled="true"] { cursor: not-allowed; color: var(--ink-3); }
+.channel[data-volatile="1"] .ch-boot, .tag[data-volatile="1"] { color: var(--ink-2); }
 .step-field input { width: 104px; text-align: right; font-size: var(--t-16); }
 .step-field.narrow input { width: 72px; }
 .channel[data-pending="1"] .step-field input, #epp[data-pending="1"], #governor[data-pending="1"] { color: var(--amber-text); border-color: var(--amber-edge); }

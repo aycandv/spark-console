@@ -152,6 +152,12 @@ try {
   check(await evaluate(`window.__row.isConnected`), "sensor row node survives 3 ticks");
   await evaluate(`document.querySelector("#d-sensors").open = false; document.activeElement.blur(); window.scrollTo(0, 0)`);
 
+  // --- a stepper at its limit keeps focus (aria-disabled, not disabled) ---
+  await evaluate(`(() => { const n = document.querySelector("#ch-gpu [data-nocap]"); if (n.checked) n.click(); const i = document.querySelector("#ch-gpu [data-input]"); i.value = "3000"; i.dispatchEvent(new Event("change")); })()`);
+  await evaluate(`(() => { const b = document.querySelector('#ch-gpu [data-step="1"]'); b.focus(); b.click(); })()`);
+  check(await evaluate(`document.querySelector('#ch-gpu [data-step="1"]').getAttribute("aria-disabled") === "true"`) && await activeIs('#ch-gpu [data-step="1"]'), "GPU + at its limit: off, and focus stays on it");
+  await evaluate(`document.querySelector("#discard").click(); document.activeElement.blur()`);
+
   // --- energy drawer, idle: E opens it, the page makes room, Escape closes it and focus comes back ---
   await evaluate(IDLE);
   await sleep(1500);

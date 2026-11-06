@@ -1,6 +1,6 @@
 /* spark-console client (ES module). One SSE stream drives everything; controls stage values,
    Apply opens a trial on the server, Keep / Revert close it. Nodes are built once and patched per tick. */
-import { trialStart, trialDelta, classNow, classTrial, honesty, loadScale, trialOutcome, SETTLE_S, linkState, revertReason, errorText } from "./metrics.js";
+import { trialStart, trialDelta, classNow, classTrial, honesty, loadScale, trialOutcome, SETTLE_S, linkState, notSaved, revertReason, errorText } from "./metrics.js";
 import { initEnergy } from "./energy.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -426,6 +426,8 @@ function renderCommit() {
   bar.dataset.mode = mode;
   bar.toggleAttribute("data-urgent", !!t && t.remaining_s <= 10);
   bar.toggleAttribute("data-arming", !!t && !trialArmed());
+  const ro = c.helper_installed === false;
+  bar.toggleAttribute("data-ro", ro);
   const title = t ? `${mmss(t.remaining_s)} trial · spark-console` : "spark-console";
   if (document.title !== title) document.title = title; // a background tab still shows the trial
   if (S.busyLabel) bar.setAttribute("aria-busy", "true"); else bar.removeAttribute("aria-busy");
@@ -458,6 +460,8 @@ function renderCommit() {
     html = esc(outcomeText());
   } else if (mode === "failed" && S.errorAction === "apply") {
     html = "Nothing changed.";
+  } else if (ro) {
+    html = "Read-only: the root helper is not installed, so the controls are off. Run <code>sudo deploy/install.sh</code> in the repo on this machine, then reload.";
   } else {
     const last = (c.events || []).at(-1);
     html = esc(last ? `${eventText(last)} · ${clock(last.t)}` : "No changes staged. Use the channels, the CPU policy or a profile.");
@@ -541,7 +545,7 @@ function renderChannel(id, knob, read, sub, range, lamps) {
   const el = $(id), c = S.control || {}, t = c.trial;
   const cur = c.current?.[knob], eff = effective(knob), pending = knob in S.staged;
   const inTrial = !!(t && knob in t.applied);
-  const isGpu = knob === "gpu_cap_mhz";
+  const isGpu = knob === "gpu_cap_mhz", ro = c.helper_installed === false;
   el.dataset.pending = pending ? "1" : "0";
   el.dataset.trial = inTrial && !pending ? "1" : "0";
   $("[data-trialchip]", el).hidden = !inTrial;
@@ -553,24 +557,30 @@ function renderChannel(id, knob, read, sub, range, lamps) {
       ? `<span class="sr-only">in trial </span>${esc(knobText(knob, cur))}<span class="was"><span class="sr-only">, was </span>${esc(knobText(knob, t.prev[knob]))}</span>`
       : esc(knobText(knob, cur)));
   const boot = c.persisted?.[knob];
+  // A running value that boot does not set: quiet ink and words, no amber (amber is staged or trial).
+  const volatile = !pending && !inTrial && notSaved(knob, cur, c.persisted, c.limits);
+  el.dataset.volatile = volatile ? "1" : "0";
   // Without a spark-console drop-in the CPU max is the hardware max at boot.
-  setText($("[data-boot]", el), knob in (c.persisted || {}) ? `Boot ${knobText(knob, boot)}` : isGpu ? "Boot no cap" : "Boot full range");
-  setText($("[data-read]", el), fmt(read));
+  setText($("[data-boot]", el), `${knob in (c.persisted || {}) ? `Boot ${knobText(knob, boot)}` : isGpu ? "Boot no cap" : "Boot full range"}${volatile ? " · not saved for boot" : ""}`);
+  const rv = $("[data-read]", el);
+  setText(rv, fmt(read));
+  rv.dataset.empty = read == null ? "1" : "0";
   setText($("[data-sub]", el), sub);
   const input = $("[data-input]", el);
   const mhz = eff == null ? null : isGpu ? eff : Math.round(eff / 1000);
   if (document.activeElement !== input) input.value = mhz ?? "";
   input.min = range[0];
   input.max = range[1];
-  input.disabled = isGpu && eff == null;
+  input.disabled = (isGpu && eff == null) || ro;
+  // aria-disabled, not disabled: a stepper at its limit keeps focus.
   for (const b of el.querySelectorAll("[data-step]")) {
     const d = Number(b.dataset.step);
-    b.disabled = mhz == null || (d < 0 ? mhz <= range[0] : mhz >= range[1]);
+    setDis(b, ro || mhz == null || (d < 0 ? mhz <= range[0] : mhz >= range[1]));
   }
   setText($("[data-limit]", el), mhz == null ? "" : mhz >= range[1] ? `At max ${fmt(range[1])} MHz` : mhz <= range[0] ? `At min ${fmt(range[0])} MHz` : "");
   setText($("[data-clamp]", el), S.clamp?.id === id ? S.clamp.text : "");
   const nocap = $("[data-nocap]", el);
-  if (nocap) nocap.checked = eff == null;
+  if (nocap) { nocap.checked = eff == null; nocap.disabled = ro; }
   renderLamps($("[data-lamps]", el), lamps);
 }
 
@@ -600,10 +610,10 @@ function bindChannel(id, knob, rangeOf) {
     const d = Number(b.dataset.step) * 100;
     let t1, t2;
     const stop = () => { clearTimeout(t1); clearInterval(t2); };
-    const once = () => { if (b.disabled) stop(); else stepBy(d); };
+    const once = () => (isDis(b) ? stop() : stepBy(d));
     // Press and hold repeats: first repeat at 400 ms, then every 80 ms.
     b.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0 || b.disabled) return;
+      if (e.button !== 0 || isDis(b)) return;
       once();
       t1 = setTimeout(() => { t2 = setInterval(once, 80); }, 400);
     });
@@ -635,7 +645,7 @@ function buildPolicy() {
 function renderPolicy() {
   const c = S.control, snap = S.snap;
   if (!c || !snap) return;
-  const cur = c.current, t = c.trial, effEpp = effective("epp"), effGov = effective("governor");
+  const cur = c.current, t = c.trial, effEpp = effective("epp"), effGov = effective("governor"), ro = c.helper_installed === false;
   const eppStaged = "epp" in S.staged, govStaged = "governor" in S.staged;
   const eppTrial = !!(t && "epp" in t.applied), govTrial = !!(t && "governor" in t.applied);
   const pol = $("#policy");
@@ -646,12 +656,19 @@ function renderPolicy() {
     const isCur = cur.epp === v, isStaged = eppStaged && effEpp === v, isTrial = !eppStaged && eppTrial && cur.epp === v;
     b.setAttribute("aria-pressed", String(isCur));
     b.classList.toggle("is-amber", isStaged || isTrial);
+    setDis(b, ro);
     setText($("[data-sr]", b), isStaged ? ", staged" : isTrial ? ", in trial" : isCur ? ", current" : "");
   }
   const epp = $("#epp");
   if (document.activeElement !== epp) epp.value = effEpp;
   epp.dataset.pending = eppStaged ? "1" : "0";
-  setText($("#epp-boot"), c.persisted?.epp != null ? `Boot ${c.persisted.epp}` : "");
+  epp.disabled = ro;
+  const bootTag = (el, text, knob, staged, inTrial) => {
+    const v = !staged && !inTrial && notSaved(knob, cur[knob], c.persisted, c.limits);
+    el.dataset.volatile = v ? "1" : "0";
+    setText(el, text && `${text}${v ? " · not saved for boot" : ""}`);
+  };
+  bootTag($("#epp-boot"), c.persisted?.epp != null ? `Boot ${c.persisted.epp}` : "", "epp", eppStaged, eppTrial);
   setText($("#epp-now"), eppStaged ? `now ${cur.epp}` : eppTrial ? `was ${t.prev.epp}` : "");
   const gov = $("#governor");
   const opts = snap.cpu.governors.join(",");
@@ -661,7 +678,8 @@ function renderPolicy() {
   }
   if (document.activeElement !== gov) gov.value = effGov;
   gov.dataset.pending = govStaged ? "1" : "0";
-  setText($("#gov-boot"), `Boot ${c.persisted?.governor || "nv-cpu-governor"}`);
+  gov.disabled = ro;
+  bootTag($("#gov-boot"), `Boot ${c.persisted?.governor || "nv-cpu-governor"}`, "governor", govStaged, govTrial);
   setText($("#gov-now"), govStaged ? `now ${cur.governor}` : govTrial ? `was ${t.prev.governor}` : "");
 }
 
@@ -689,6 +707,7 @@ function renderProfiles() {
     const isCur = vals.every(([k, v]) => cur[k] === v);
     const isStaged = anyStaged && vals.every(([k, v]) => effective(k) === v) && vals.some(([k]) => k in S.staged);
     const btn = $(".pf-btn", pf);
+    setDis(btn, S.control?.helper_installed === false);
     if (isCur) btn.setAttribute("aria-current", "true"); else btn.removeAttribute("aria-current");
     pf.dataset.staged = isStaged ? "1" : "0";
     setText($("[data-sr]", btn), isStaged ? ", staged" : isCur ? ", current" : "");
@@ -995,7 +1014,7 @@ function bind() {
   }
   $("#epp-stops").addEventListener("click", (e) => {
     const b = e.target.closest("[data-epp]");
-    if (b) stage("epp", Number(b.dataset.epp));
+    if (b && !isDis(b)) stage("epp", Number(b.dataset.epp));
   });
   $("#epp").addEventListener("change", (e) => {
     const v = Math.round(Number(e.target.value));
@@ -1020,7 +1039,7 @@ function bind() {
       return;
     }
     const b = e.target.closest("[data-profile]");
-    if (!b) return;
+    if (!b || isDis(b)) return;
     // A profile replaces what is staged (no merge with leftovers).
     const p = S.profiles[Number(b.dataset.profile)], cur = S.control?.current || {};
     S.staged = {};
