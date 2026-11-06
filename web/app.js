@@ -268,10 +268,12 @@ async function post(path, body = {}, action = path) {
 /* One link state drives the header word, the dot and the dimming of every live reading. It is written only
    on a change, so the polite status region speaks once. Age is time since the last message on this clock,
    so a phone with a skewed clock is not "stale" for ever. */
-let linkOpen = null;
+let linkOpen = null, openedAt = 0;
 const LINK_TEXT = { connecting: "Connecting…", live: "Live · 1 s", stale: "Stale data", lost: "Reconnecting…" };
 function setLink() {
-  const st = linkState({ open: linkOpen, age: S.gotAt ? (Date.now() - S.gotAt) / 1000 : null });
+  const now = Date.now();
+  const st = linkState({ open: linkOpen, age: S.gotAt ? (now - S.gotAt) / 1000 : null,
+    held: linkOpen && S.gotAt < openedAt ? (now - openedAt) / 1000 : null, prev: S.link });
   if (st === S.link) return;
   S.link = st;
   document.documentElement.dataset.link = st;
@@ -283,6 +285,7 @@ function connect() {
   const es = new EventSource("api/stream");
   es.onopen = () => {
     linkOpen = true;
+    openedAt = Date.now();
     // A request that got no answer is stale news once the server is back: show the trial outcome instead.
     if (S.errorNet) { S.error = ""; S.errorNet = false; }
     setLink();
@@ -341,6 +344,8 @@ function trackTrial() {
   } else if (!key && S.trialKey) {
     S.trialKey = null;
     S.trialStarted = null;
+    // A Keep or Revert that got no answer is stale news now: the outcome below is what happened.
+    if (S.errorNet) { S.error = ""; S.errorNet = false; }
     S.outcome = { ...trialOutcome(S.control?.events || []), until: Date.now() + 4000, evidence: S.lastEvidence };
     announce(outcomeText(true));
     // Ended by the timeout or elsewhere: the Keep/Revert row is about to hide, so do not lose focus with it.
@@ -371,7 +376,9 @@ function outcomeText(sentence = false) {
   else text = [revertReason(e), e?.values && `back to ${vals}`].filter(Boolean).join(", ");
   const words = evidenceWords(o.evidence);
   if (!sentence) return words ? `${text} · trial: ${words}` : text;
-  return `${o.kind === "kept" ? "Kept" : "Reverted"} ${text}.${words ? ` Trial: ${words}.` : ""}`;
+  // A reason follows a colon, so "Reverted: the server restarted" is not read as the console reverting the server.
+  const head = o.kind === "kept" ? "Kept" : revertReason(e) ? "Reverted:" : "Reverted";
+  return `${head} ${text}.${words ? ` Trial: ${words}.` : ""}`;
 }
 /* The bar's evidence: the only place that counts the measuring seconds. Verdict dots and words match the rail
    and the phone pill: "● −13.4 W · ● decode −30 %", "power ≈ same". */
@@ -425,7 +432,7 @@ function renderCommit() {
   const nStaged = Object.keys(S.staged).length;
   const mode = commitMode();
   // Apply: the change chips slide from where they were staged (FLIP, the one layout read per mode change).
-  const flip = bar.dataset.mode === "staged" && mode === "trial" && !reduced.matches ? $("#commit-text").getBoundingClientRect().left : null;
+  const r0 = bar.dataset.mode === "staged" && mode === "trial" && !reduced.matches ? $("#commit-text").getBoundingClientRect() : null;
   bar.dataset.mode = mode;
   bar.toggleAttribute("data-urgent", !!t && t.remaining_s <= 10);
   bar.toggleAttribute("data-arming", !!t && !trialArmed());
@@ -461,7 +468,7 @@ function renderCommit() {
       + Object.entries(S.staged).map(([k, v]) => chgHTML(k, c.current?.[k], v)).join("");
   } else if (mode === "outcome") {
     html = esc(outcomeText());
-  } else if (mode === "failed" && S.errorAction === "apply") {
+  } else if (mode === "failed" && S.errorAction === "apply" && !S.errorNet) {
     html = "Nothing changed.";
   } else if (ro) {
     html = "Read-only: the root helper is not installed, so the controls are off. Run <code>sudo deploy/install.sh</code> in the repo on this machine, then reload.";
@@ -499,9 +506,12 @@ function renderCommit() {
     setText(lab, S.busyLabel && S.busy === action ? busyText : lab.dataset.idle);
   }
   $("#reapply-boot").disabled = !!S.busy || !!t || !c.helper_installed;
-  if (flip != null) {
-    const dx = flip - $("#commit-text").getBoundingClientRect().left;
-    if (dx) $("#commit-text").animate([{ transform: `translateX(${dx}px)` }, { transform: "none" }], { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
+  if (r0) {
+    const r1 = $("#commit-text").getBoundingClientRect(), dx = r0.left - r1.left, dy = r0.top - r1.top;
+    // Chips that re-wrap (phone) have no single origin: they appear in place.
+    if ((dx || dy) && Math.round(r0.height) === Math.round(r1.height)) {
+      $("#commit-text").animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
+    }
   }
   const err = $("#commit-error");
   err.hidden = !S.error;
@@ -716,6 +726,7 @@ function renderProfiles() {
     pf.dataset.staged = isStaged ? "1" : "0";
     setText($("[data-sr]", btn), isStaged ? ", staged" : isCur ? ", current" : "");
   });
+  $("#save-profile").disabled = S.control?.helper_installed === false; // read-only: nothing can be staged
 }
 
 /* --- render: effect rail ------------------------------------------------------------------------------------------------------------ */
@@ -723,13 +734,14 @@ const RAIL = [
   { key: "gpu.power_w", label: "GPU power", unit: "W", word: "watts", d: 1, val: (s) => s.gpu?.power_w, meta: () => `measured · ${statMeta("gpu.power_w", 1, "W")}` },
   { key: "llm.tok_s", label: "Decode", unit: "tok/s", word: "tokens per second", d: 1, val: (s) => s.llm?.tok_s, meta: (s) => (s.llm?.endpoints || []).filter((e) => e.ok).map((e) => e.model || e.engine).join(", ") || "no LLM server answering" },
   { key: "llm.j_per_tok", label: "Energy", unit: "J/tok", word: "joules per token", d: 2, val: (s) => s.llm?.j_per_tok, meta: () => "GPU W ÷ tok/s (GPU only)" },
-  { key: "gpu.tlimit_c", label: "GPU headroom", unit: "°C", word: "degrees", d: 0, val: (s) => s.gpu?.tlimit_c, meta: (s) => `GPU ${fmt(s.gpu?.temp_c)} °C · min ${fmt(S.snap?.stats?.["gpu.tlimit_c"]?.min)} °C` },
-  { key: "gpu.util", label: "GPU busy", unit: "%", word: "percent", d: 0, val: (s) => s.gpu?.util, meta: (s) => `${s.gpu?.pstate ?? ""} · SM ${fmt(s.gpu?.sm_mhz)} MHz` },
-  { key: "mem.avail_gib", label: "Memory free", unit: "GiB", word: "GiB", d: 1, val: (s) => s.mem?.avail_kib / 1048576, meta: (s) => `PSI ${fmt(s.mem?.psi?.some?.avg10, 1)} % · swap ${fmt(s.mem?.swap_used_kib / 1048576, 1)} GiB` },
+  { key: "gpu.tlimit_c", label: "GPU headroom", unit: "°C", word: "degrees", d: 0, val: (s) => s.gpu?.tlimit_c, meta: (s) => `GPU\u00a0${fmt(s.gpu?.temp_c)}\u00a0°C · min\u00a0${fmt(S.snap?.stats?.["gpu.tlimit_c"]?.min)}\u00a0°C` },
+  { key: "gpu.util", label: "GPU busy", unit: "%", word: "percent", d: 0, val: (s) => s.gpu?.util, meta: (s) => `${s.gpu?.pstate ?? ""} · SM\u00a0${fmt(s.gpu?.sm_mhz)}\u00a0MHz` },
+  { key: "mem.avail_gib", label: "Memory free", unit: "GiB", word: "GiB", d: 1, val: (s) => s.mem?.avail_kib / 1048576, meta: (s) => `PSI\u00a0${fmt(s.mem?.psi?.some?.avg10, 1)}\u00a0% · swap\u00a0${fmt(s.mem?.swap_used_kib / 1048576, 1)}\u00a0GiB` },
 ];
 function statMeta(key, d, unit) {
   const st = S.snap?.stats?.[key];
-  return st ? `avg ${fmt(st.avg, d)} · max ${fmt(st.max, d)} ${unit}` : "";
+  // U+00A0 joins label, number and unit, so a narrow readout breaks the line only at " · "
+  return st ? `avg\u00a0${fmt(st.avg, d)} · max\u00a0${fmt(st.max, d)}\u00a0${unit}` : "";
 }
 function buildRail() {
   const rail = $("#rail");
@@ -752,7 +764,7 @@ function deltaLine(r, d) {
   const sr = `${r.label} ${fmt(Math.abs(d.d), r.d)} ${r.word} ${d.d < 0 ? "lower" : "higher"} than before the trial, ${d.verdict}.`;
   return {
     v: d.verdict === "within noise" ? "noise" : d.verdict,
-    html: `<span aria-hidden="true">${signed(d.d, r.d)} ${esc(r.unit)}${pct} ·</span>${dot}<span aria-hidden="true">${d.verdict}</span><span class="sr-only">${esc(sr)}</span>`,
+    html: `<span aria-hidden="true">${signed(d.d, r.d)} ${esc(r.unit)}${pct} ·</span><span>${dot}<span aria-hidden="true">${d.verdict}</span></span><span class="sr-only">${esc(sr)}</span>`,
   };
 }
 function renderRail() {
@@ -949,7 +961,8 @@ function render(tick = true) {
     const r = lim[k] || [0, 0];
     renderChannel(`#ch-${k}`, `${k}_max_khz`, cl.mhz, `${fmt(cl.util)} % busy · ${cl.cores ?? 0} cores`,
       [Math.ceil(r[0] / 1000), Math.floor(r[1] / 1000)],
-      [[cl.perf_limited > 0, cl.perf_limited > 0 ? `Perf limited · ${cl.perf_limited}` : "Perf limited", "serious", "Performance limited"]]);
+      [[cl.perf_limited > 0, cl.perf_limited > 0 ? `Perf limited · ${cl.perf_limited}` : "Perf limited", "serious",
+        cl.perf_limited > 0 ? `Performance limited on ${cl.perf_limited} core${cl.perf_limited === 1 ? "" : "s"}` : "Performance limited"]]);
   }
   renderPolicy();
   renderProfiles();

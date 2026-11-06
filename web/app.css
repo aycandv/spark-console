@@ -216,12 +216,15 @@ kbd { font: 500 var(--t-12)/1 "Plex Cond", sans-serif; letter-spacing: 0.04em; p
 .btn.primary:disabled { background: var(--bezel); color: var(--ink-4); border-color: var(--rule-strong); }
 .btn.primary kbd { color: inherit; border-color: color-mix(in srgb, currentColor 45%, transparent); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); }
+.btn.ghost:disabled { background: transparent; border-color: transparent; color: var(--ink-4); }
 .btn.small { min-height: 32px; padding: 0 var(--s3); font-size: var(--t-14); }
 select, input[type="number"], input[type="search"], dialog input {
   min-height: 40px; background: var(--field); border: 1px solid var(--ctl-edge); border-radius: var(--r-ctl);
   padding: 0 var(--s3); color: var(--ink); transition: border-color var(--dur-state) var(--ease);
 }
 select { padding-right: var(--s6); }
+/* read-only: fields read as off, the current values stay legible */
+select:disabled, input:disabled { color: var(--ink-4); border-color: var(--rule-strong); cursor: not-allowed; opacity: 1; }
 input[type="number"] { -moz-appearance: textfield; }
 input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
 input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--ink); }
@@ -249,9 +252,11 @@ main > * { min-width: 0; }
 }
 
 /* --- liveness: when the data is not live, every live reading dims ------------------------------------ */
-.read-val, .read-sub, .trace, .r-val, .r-meta, .r-delta, .spark, .countdown, .commit-ev, .drain, .cell b, .kv b, .ec-sw { transition: opacity var(--dur-state) var(--ease); }
-html:is([data-link="stale"], [data-link="lost"]) :is(.read-val, .read-sub, .trace, .r-val, .r-meta, .r-delta,
-  .spark, .countdown, .commit-ev, .drain, .cell b, .kv b, .ec-sw) { opacity: 0.45; }
+/* graphics fade; text turns quiet ink instead, so the last values stay readable (AA) */
+.trace, .spark, .drain, .ec-sw { transition: opacity var(--dur-state) var(--ease); }
+html:is([data-link="stale"], [data-link="lost"]) :is(.trace, .spark, .drain, .ec-sw) { opacity: 0.45; }
+html:is([data-link="stale"], [data-link="lost"]) :is(.read-val, .r-val, .r-delta, .commit-ev, .cell b, .kv b),
+html:is([data-link="stale"], [data-link="lost"]) .commit .countdown { color: var(--ink-3); background: none; }
 
 /* --- profiles ------------------------------------------------------------------------------------------------ */
 .profile-row { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
@@ -357,6 +362,8 @@ html:is([data-link="stale"], [data-link="lost"]) :is(.read-val, .read-sub, .trac
 }
 .epp-stops button:first-child { border-left: 0; }
 .epp-stops button[aria-pressed="true"] { background: var(--bezel); color: var(--ink); font-weight: 600; box-shadow: inset 0 -2px 0 var(--ink); }
+/* read-only: the current stop and profile stay marked, in quiet ink like the rest of the off controls */
+.epp-stops button[aria-disabled="true"][aria-pressed="true"], .pf-btn[aria-disabled="true"][aria-current="true"] { color: var(--ink-3); box-shadow: inset 0 -2px 0 var(--ink-4); }
 .epp-stops button.is-amber { color: var(--amber-text); box-shadow: inset 0 -2px 0 var(--amber-edge); }
 .epp-stops small { color: var(--ink-3); font-weight: 400; font-size: var(--t-12); }
 
@@ -388,10 +395,12 @@ html:is([data-link="stale"], [data-link="lost"]) :is(.read-val, .read-sub, .trac
 /* wraps instead of clipping: the verdict word is the point of the line */
 .r-delta { font-size: var(--t-14); font-weight: 600; color: var(--ink); min-height: 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; }
 .r-delta > span { white-space: nowrap; }
+.r-delta .vdot { margin-right: 6px; transform: translateY(-1px); } /* the dot and its word wrap as one */
 .r-delta[data-v="noise"], .r-delta[data-v="wait"] { font-weight: 400; color: var(--ink-3); }
 .vdot { width: 6px; height: 6px; border-radius: 50%; flex: none; display: inline-block; }
 .vdot[data-v="better"] { background: var(--lamp-ok); }
-.vdot[data-v="worse"] { background: var(--lamp-serious); }
+/* worse is a hollow ring, better a filled dot: the shape carries the verdict, not the hue alone */
+.vdot[data-v="worse"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--lamp-serious); }
 .spark { height: 36px; margin-top: var(--s1); }
 
 /* --- details (reference material: no fill) ---------------------------------------------------------------------------- */
@@ -478,9 +487,9 @@ dialog input[aria-invalid="true"] { border-color: var(--lamp-serious); box-shado
 @media (hover: hover) and (pointer: fine) {
   a:hover { color: var(--ink); }
   .annun:hover { background: var(--bezel); }
-  .btn:not([aria-disabled="true"]):hover { background: var(--bezel); }
+  .btn:not([aria-disabled="true"], :disabled):hover { background: var(--bezel); }
   .btn.primary:not([aria-disabled="true"]):hover { background: var(--primary-hover); }
-  .btn.ghost:not([aria-disabled="true"]):hover { background: var(--bezel); color: var(--ink); }
+  .btn.ghost:not([aria-disabled="true"], :disabled):hover { background: var(--bezel); color: var(--ink); }
   .seg button:hover { background: var(--bezel); }
   .pf-btn:not([aria-disabled="true"]):hover { background: var(--bezel); }
   .pf-del:hover { background: var(--bezel); color: var(--ink); }
@@ -607,7 +616,7 @@ dialog input[aria-invalid="true"] { border-color: var(--lamp-serious); box-shado
 .trade td[data-v="within noise"], .trade td[data-v="no decode"], .trade td[data-v="measuring"] { color: var(--paper-ink-2); }
 .trade td[data-v="better"], .trade td[data-v="worse"] { font-weight: 600; }
 .trade .vdot[data-v="better"] { background: #16801a; }
-.trade .vdot[data-v="worse"] { background: var(--paper-serious); }
+.trade .vdot[data-v="worse"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--paper-serious); }
 .honesty { margin-top: var(--s3); font-weight: 600; display: flex; gap: var(--s2); align-items: baseline; }
 .honesty::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--paper-serious); flex: none; transform: translateY(-1px); }
 .t-foot { margin-top: var(--s4); font-size: var(--t-12); color: var(--paper-ink-2); }
@@ -712,6 +721,9 @@ dialog input[aria-invalid="true"] { border-color: var(--lamp-serious); box-shado
 /* --- reduced motion: no spatial motion; colour and opacity stay, at most 150 ms --------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
   .btn:active, .step:active, .ec-tab:active { transform: none; }
+  /* arming: no filling bar, so the actions show the wait by dimming */
+  .commit[data-arming] .commit-actions .btn[aria-disabled="true"] { opacity: 0.5; }
+  .commit[data-arming] #keep::after { content: none; }
   .commit { transition-duration: var(--dur-state); }
   .ec-tab:hover, .ec-tab:active { translate: none !important; }
   .ec-tab, .ec-tab[aria-expanded="true"] { transition: background-color var(--dur-state) var(--ease); }
@@ -732,7 +744,11 @@ dialog input[aria-invalid="true"] { border-color: var(--lamp-serious); box-shado
   /* forced-color-adjust: none, or Chrome draws a Canvas backplate under the HighlightText */
   .seg button[aria-pressed="true"], .epp-stops button[aria-pressed="true"], .pf-btn[aria-current="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
   .epp-stops button[aria-pressed="true"] small, .pf-btn[aria-current="true"] :is(.pf-vals, .pf-note) { color: HighlightText; }
+  .epp-stops button[aria-disabled="true"][aria-pressed="true"], .pf-btn[aria-disabled="true"][aria-current="true"] { color: HighlightText; }
   .epp-stops button.is-amber, .pf[data-staged="1"] .pf-btn { outline: 2px dashed CanvasText; outline-offset: -4px; }
+  /* focus on those: solid, so it differs from the staged dash, and in the fill's text colour on a Highlight fill */
+  .epp-stops button.is-amber:focus-visible, .pf[data-staged="1"] .pf-btn:focus-visible { outline: 2px solid CanvasText; outline-offset: -2px; }
+  .seg button[aria-pressed="true"]:focus-visible, .epp-stops button[aria-pressed="true"]:focus-visible, .pf-btn[aria-current="true"]:focus-visible { outline-color: HighlightText; }
   .switch-track::after { background: CanvasText; }
   .switch[aria-pressed="true"] .switch-track { background: Highlight; }
   .commit[data-mode="trial"] { border-bottom: 2px solid Highlight; }

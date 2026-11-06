@@ -135,6 +135,13 @@ try {
   check(await bodyBg() === "rgb(20, 22, 25)", "Auto + OS dark: dark chassis");
   check(await evaluate(`document.documentElement.dataset.chartTheme === "dark"`), "charts drawn for dark");
   check(!(await isOpen()), "drawer starts closed");
+  // Read-only (no root helper), rendered for one frame: the bar says so and nothing can be staged or saved.
+  check(await evaluate(`(() => { const { S, render } = window.__sc, was = S.control.helper_installed;
+    S.control.helper_installed = false; render(false);
+    const ok = /^Read-only/.test(document.querySelector("#commit-text").textContent)
+      && [...document.querySelectorAll("[data-step], #epp-stops [data-epp], .pf-btn, #apply")].every((b) => b.getAttribute("aria-disabled") === "true")
+      && [...document.querySelectorAll("[data-input], [data-nocap], #epp, #governor, #save-profile")].every((e) => e.disabled);
+    S.control.helper_installed = was; render(false); return ok; })()`), "read-only: the bar says so; controls and Save staged as… are off");
   await shot("desktop-top-dark.png", false);
   await evaluate(`document.querySelectorAll("details").forEach((d) => d.open = true)`);
   await sleep(1500);

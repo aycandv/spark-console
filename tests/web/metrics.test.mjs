@@ -202,6 +202,13 @@ test("linkState: connecting, lost, stale and live", () => {
   assert.equal(linkState({ open: true, age: 5.1 }), "stale");
 });
 
+test("linkState: a (re)opened stream keeps the old state until its first message, for at most 5 s", () => {
+  assert.equal(linkState({ open: true, age: 30, held: 0.15, prev: "lost" }), "lost", "lost goes to live, not via stale");
+  assert.equal(linkState({ open: true, age: null, held: 0.15, prev: "connecting" }), "connecting");
+  assert.equal(linkState({ open: true, age: 30, held: 5.1, prev: "lost" }), "stale", "open but silent: stale after 5 s");
+  assert.equal(linkState({ open: true, age: 0.2, held: null, prev: "lost" }), "live");
+});
+
 test("notSaved compares the running value with the boot value", () => {
   const limits = { x925: [1000000, 3900000], a725: [1000000, 2808000] };
   assert.equal(notSaved("epp", 192, { epp: 192 }), false, "equal");
@@ -228,6 +235,7 @@ test("errorText names the console server or the helper", () => {
   const net = /console server did not answer/;
   assert.match(errorText(new TypeError("Failed to fetch"), "keep"), net);
   assert.match(errorText({ status: 502, message: "HTTP 502" }, "keep"), net, "a proxy 502 has no server error body");
+  assert.doesNotMatch(errorText(new TypeError("Failed to fetch"), "keep"), /Live/, "the stream can stay live while a POST fails");
   assert.equal(errorText({ status: 502, server: true, message: "helper failed: no sudo" }, "keep-boot"),
     "Kept until reboot; saving for boot failed: no sudo.");
   assert.equal(errorText({ status: 409, server: true, message: "a trial is open" }, "apply"), "A trial is already open: Keep or Revert it first.");

@@ -163,10 +163,13 @@ export function trialOutcome(events) {
   return { kind: "kept", ev, boot: next ? (next.kind === "persisted" ? "saved" : "failed") : null };
 }
 
-/* The live link: connecting (never opened), lost (stream error), stale (open, data over 5 s old) or live. */
-export function linkState({ open, age }) {
+/* The live link: connecting (never opened), lost (stream error), stale (open, data over 5 s old) or live.
+   held: seconds since the stream (re)opened while no message has come yet (else null). For up to 5 s the old
+   state stays, so a reconnect goes lost → live and the status region does not say "Stale data" first. */
+export function linkState({ open, age, held = null, prev = null }) {
   if (open === null) return "connecting";
   if (!open) return "lost";
+  if (held != null && held <= 5 && prev) return prev;
   return age == null || age > 5 ? "stale" : "live";
 }
 
@@ -192,7 +195,7 @@ export function revertReason(ev) {
 /* A failed POST in words. e.server: the console server answered with an error body; without it the request
    got no answer from the server (fetch failed, or the proxy answered for it). The state differs per action. */
 export function errorText(e, action) {
-  if (!e.server) return "The console server did not answer. An open trial still reverts on time. Wait for Live, then try again.";
+  if (!e.server) return "The console server did not answer. Try again; an open trial still reverts on time.";
   if (e.status === 409 && action === "apply") return "A trial is already open: Keep or Revert it first.";
   if (e.status !== 502) return `Failed: ${e.message}`;
   const why = e.message.replace(/^helper failed: /, "");
