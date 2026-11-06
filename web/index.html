@@ -26,11 +26,6 @@
     <a class="to-sparkdash" href="#" target="_blank" rel="noopener">sparkDash</a>
     <a class="to-dgx" href="#" target="_blank" rel="noopener">DGX Dashboard</a>
   </nav>
-  <div class="seg theme-seg" role="group" aria-label="Theme" id="theme">
-    <button type="button" data-theme-set="auto" aria-pressed="true">Auto</button>
-    <button type="button" data-theme-set="dark" aria-pressed="false">Dark</button>
-    <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
-  </div>
 </header>
 
 <!-- The commit bar carries the state: idle, staged, trial, outcome, failed. -->
@@ -80,7 +75,7 @@
 
     <div class="channels" id="channels">
       <article class="channel" id="ch-gpu" data-knob="gpu_cap_mhz" aria-labelledby="ch-gpu-h">
-        <header class="ch-head"><span class="ch-num silk">CH1</span><h2 id="ch-gpu-h">GPU</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot silk" data-boot></span></header>
+        <header class="ch-head"><span class="ch-num silk">CH1</span><h2 id="ch-gpu-h">GPU</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot meta" data-boot></span></header>
         <div class="ch-set"><span class="silk">Set</span><span class="set-val" data-set id="ch-gpu-set"></span></div>
         <div class="ch-read"><span class="read-val" data-read>—</span><span class="read-unit">MHz</span></div>
         <p class="read-sub" data-sub></p>
@@ -98,7 +93,7 @@
       </article>
 
       <article class="channel" id="ch-x925" data-knob="x925_max_khz" aria-labelledby="ch-x925-h">
-        <header class="ch-head"><span class="ch-num silk">CH2</span><h2 id="ch-x925-h">CPU · X925</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot silk" data-boot></span></header>
+        <header class="ch-head"><span class="ch-num silk">CH2</span><h2 id="ch-x925-h">CPU · X925</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot meta" data-boot></span></header>
         <div class="ch-set"><span class="silk">Set max</span><span class="set-val" data-set id="ch-x925-set"></span></div>
         <div class="ch-read"><span class="read-val" data-read>—</span><span class="read-unit">MHz</span></div>
         <p class="read-sub" data-sub></p>
@@ -115,7 +110,7 @@
       </article>
 
       <article class="channel" id="ch-a725" data-knob="a725_max_khz" aria-labelledby="ch-a725-h">
-        <header class="ch-head"><span class="ch-num silk">CH3</span><h2 id="ch-a725-h">CPU · A725</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot silk" data-boot></span></header>
+        <header class="ch-head"><span class="ch-num silk">CH3</span><h2 id="ch-a725-h">CPU · A725</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot meta" data-boot></span></header>
         <div class="ch-set"><span class="silk">Set max</span><span class="set-val" data-set id="ch-a725-set"></span></div>
         <div class="ch-read"><span class="read-val" data-read>—</span><span class="read-unit">MHz</span></div>
         <p class="read-sub" data-sub></p>
@@ -140,13 +135,13 @@
           <div class="epp-stops" role="group" aria-labelledby="epp-l" id="epp-stops"></div>
           <label class="step-field narrow"><span class="sr-only">EPP value 0 to 255</span>
             <input type="number" id="epp" min="0" max="255" step="1" inputmode="numeric" autocomplete="off"></label>
-          <span class="silk tag" id="epp-boot"></span>
+          <span class="meta tag" id="epp-boot"></span>
           <span class="policy-now" id="epp-now"></span>
         </div>
         <div class="policy-item">
           <label class="silk" for="governor">Governor</label>
           <select id="governor"></select>
-          <span class="silk tag" id="gov-boot"></span>
+          <span class="meta tag" id="gov-boot"></span>
           <span class="policy-now" id="gov-now"></span>
         </div>
       </div>
@@ -179,7 +174,7 @@
         <table class="grid"><thead><tr><th scope="col">Pressure</th><th scope="col" class="num">10 s %</th><th scope="col" class="num">60 s %</th><th scope="col" class="num">300 s %</th></tr></thead><tbody id="psi"></tbody></table>
       </div></details>
       <details id="d-sensors"><summary><span class="d-name">Sensors</span><span class="sum" data-sum></span></summary><div class="d-body">
-        <div class="table-tools"><span class="silk" id="stats-since"></span><button class="btn ghost small" id="reset-stats" type="button">Reset min/max</button></div>
+        <div class="table-tools"><span class="meta" id="stats-since"></span><button class="btn ghost small" id="reset-stats" type="button">Reset min/max</button></div>
         <div class="scroll"><table class="grid"><thead><tr><th scope="col">Sensor</th><th scope="col" class="num">Now °C</th><th scope="col" class="num">Min °C</th><th scope="col" class="num">Max °C</th><th scope="col" class="num">Avg °C</th></tr></thead><tbody id="sensors"></tbody></table></div>
       </div></details>
       <details id="d-procs"><summary><span class="d-name">Processes</span><span class="sum" data-sum></span></summary><div class="d-body">
@@ -208,6 +203,11 @@
 
   <footer class="foot">
     <button type="button" class="switch" id="keys-switch" aria-pressed="true"><span class="switch-track" aria-hidden="true"></span>Keyboard shortcuts</button>
+    <div class="seg" role="group" aria-label="Theme" id="theme">
+      <button type="button" data-theme-set="auto" aria-pressed="true">Auto</button>
+      <button type="button" data-theme-set="dark" aria-pressed="false">Dark</button>
+      <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+    </div>
     <nav class="foot-out" aria-label="Other dashboards">
       <a class="to-sparkdash" href="#" target="_blank" rel="noopener">sparkDash</a>
       <a class="to-dgx" href="#" target="_blank" rel="noopener">DGX Dashboard</a>

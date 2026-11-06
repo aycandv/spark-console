@@ -754,8 +754,9 @@ function deltaLine(r, d) {
 function renderRail() {
   const s = S.snap;
   RAIL.forEach((r, i) => {
-    const el = $(`.readout[data-i="${i}"]`);
-    setText($("[data-v]", el), fmt(r.val(s), r.d));
+    const el = $(`.readout[data-i="${i}"]`), v = r.val(s), vEl = $("[data-v]", el);
+    setText(vEl, fmt(v, r.d));
+    vEl.dataset.empty = v == null || Number.isNaN(v) ? "1" : "0";
     const line = S.ev ? deltaLine(r, S.ev[r.key]) : null;
     const m = $("[data-m]", el), dl = $("[data-d]", el);
     m.hidden = !!line;
@@ -797,7 +798,7 @@ function renderCores(s) {
   const key = s.cpu.cores.map((c) => `${c.cluster}:${c.cpu}`).join(",");
   if (box.dataset.key !== key) {
     box.dataset.key = key;
-    box.innerHTML = ["x925", "a725"].map((k) => `<div class="cluster-row"><span class="silk">${k} · <span data-n="${k}"></span></span><div class="cells">${
+    box.innerHTML = ["x925", "a725"].map((k) => `<div class="cluster-row"><span class="meta">${k.toUpperCase()} · <span data-n="${k}"></span> cores</span><div class="cells">${
       s.cpu.cores.filter((c) => c.cluster === k).map((c) => `<div class="cell" data-cpu="${c.cpu}"><div class="fill"></div><span>cpu${c.cpu}</span><b></b></div>`).join("")}</div></div>`).join("");
   }
   for (const k of ["x925", "a725"]) { const n = $(`[data-n="${k}"]`, box); if (n) setText(n, String(s.cpu.clusters[k]?.cores ?? 0)); }
