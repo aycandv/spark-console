@@ -28,4 +28,4 @@ jobs:
       - name: JavaScript syntax
         run: for f in web/*.js scripts/*.mjs; do node --check "$f" || exit 1; done
       - name: Shell scripts
-        run: shellcheck deploy/*.sh
+        run: shellcheck install.sh deploy/*.sh
