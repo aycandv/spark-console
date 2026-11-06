@@ -735,7 +735,7 @@ function buildRail() {
   const rail = $("#rail");
   rail.innerHTML = RAIL.map((r, i) => `<div class="readout" data-i="${i}">
       <span class="silk">${esc(r.label)}</span>
-      <span class="r-val"><span data-v>—</span><small>${esc(r.unit)}</small></span>
+      <span class="r-val"><span data-v data-empty="1">—</span><small>${esc(r.unit)}</small></span>
       <span class="r-meta" data-m></span>
       <span class="r-delta" data-d hidden></span>
       <div class="spark" data-spark role="img" aria-label="${esc(r.label)} over the selected window"></div>
