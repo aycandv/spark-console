@@ -59,7 +59,7 @@ try {
     await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     await send("Page.navigate", { url });
     await sleep(4500);
-    check(await evaluate(`document.querySelector("#link")?.dataset.ok === "1"`), `${scheme}: live stream connected`);
+    check(await evaluate(`document.querySelector("#link")?.dataset.state === "live"`), `${scheme}: live stream connected`);
     check(await evaluate(`/\\d/.test(document.querySelector("#ch-gpu [data-read]")?.textContent || "")`), `${scheme}: GPU read-back shows a number`);
     const bg = await evaluate(`getComputedStyle(document.body).backgroundColor`);
     const lum = bg.match(/\d+/g).slice(0, 3).reduce((a, b) => a + Number(b), 0) / 3;

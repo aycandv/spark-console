@@ -26,11 +26,6 @@
     <a class="to-sparkdash" href="#" target="_blank" rel="noopener">sparkDash</a>
     <a class="to-dgx" href="#" target="_blank" rel="noopener">DGX Dashboard</a>
   </nav>
-  <div class="seg theme-seg" role="group" aria-label="Theme" id="theme">
-    <button type="button" data-theme-set="auto" aria-pressed="true">Auto</button>
-    <button type="button" data-theme-set="dark" aria-pressed="false">Dark</button>
-    <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
-  </div>
 </header>
 
 <!-- The commit bar carries the state: idle, staged, trial, outcome, failed. -->
@@ -39,7 +34,6 @@
     <div class="commit-lead">
       <b class="staged-count" id="staged-count"></b>
       <span class="chip chip-trial">Trial</span>
-      <span class="silk countdown-l" id="countdown-pre" hidden>Reverting in</span>
       <p class="countdown" id="countdown" role="timer" aria-atomic="true"></p>
       <span class="silk countdown-l" id="countdown-l">to revert</span>
       <span class="chip chip-out" id="chip-out" data-kind="" hidden></span>
@@ -81,9 +75,9 @@
 
     <div class="channels" id="channels">
       <article class="channel" id="ch-gpu" data-knob="gpu_cap_mhz" aria-labelledby="ch-gpu-h">
-        <header class="ch-head"><span class="ch-num silk">CH1</span><h2 id="ch-gpu-h">GPU</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot silk" data-boot></span></header>
+        <header class="ch-head"><span class="ch-num silk">CH1</span><h2 id="ch-gpu-h">GPU</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot meta" data-boot></span></header>
         <div class="ch-set"><span class="silk">Set</span><span class="set-val" data-set id="ch-gpu-set"></span></div>
-        <div class="ch-read"><span class="read-val" data-read>—</span><span class="read-unit">MHz</span></div>
+        <div class="ch-read"><span class="sr-only">Now </span><span class="read-val" data-read data-empty="1">—</span><span class="read-unit">MHz</span></div>
         <p class="read-sub" data-sub></p>
         <div class="trace" data-trace role="img" aria-label="GPU SM clock and cap"></div>
         <div class="stepper">
@@ -99,9 +93,9 @@
       </article>
 
       <article class="channel" id="ch-x925" data-knob="x925_max_khz" aria-labelledby="ch-x925-h">
-        <header class="ch-head"><span class="ch-num silk">CH2</span><h2 id="ch-x925-h">CPU · X925</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot silk" data-boot></span></header>
+        <header class="ch-head"><span class="ch-num silk">CH2</span><h2 id="ch-x925-h">CPU · X925</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot meta" data-boot></span></header>
         <div class="ch-set"><span class="silk">Set max</span><span class="set-val" data-set id="ch-x925-set"></span></div>
-        <div class="ch-read"><span class="read-val" data-read>—</span><span class="read-unit">MHz</span></div>
+        <div class="ch-read"><span class="sr-only">Now </span><span class="read-val" data-read data-empty="1">—</span><span class="read-unit">MHz</span></div>
         <p class="read-sub" data-sub></p>
         <div class="trace" data-trace role="img" aria-label="X925 cluster clock and max"></div>
         <div class="stepper">
@@ -116,9 +110,9 @@
       </article>
 
       <article class="channel" id="ch-a725" data-knob="a725_max_khz" aria-labelledby="ch-a725-h">
-        <header class="ch-head"><span class="ch-num silk">CH3</span><h2 id="ch-a725-h">CPU · A725</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot silk" data-boot></span></header>
+        <header class="ch-head"><span class="ch-num silk">CH3</span><h2 id="ch-a725-h">CPU · A725</h2><span class="chip chip-ch" data-trialchip hidden>Trial</span><span class="ch-boot meta" data-boot></span></header>
         <div class="ch-set"><span class="silk">Set max</span><span class="set-val" data-set id="ch-a725-set"></span></div>
-        <div class="ch-read"><span class="read-val" data-read>—</span><span class="read-unit">MHz</span></div>
+        <div class="ch-read"><span class="sr-only">Now </span><span class="read-val" data-read data-empty="1">—</span><span class="read-unit">MHz</span></div>
         <p class="read-sub" data-sub></p>
         <div class="trace" data-trace role="img" aria-label="A725 cluster clock and max"></div>
         <div class="stepper">
@@ -141,13 +135,13 @@
           <div class="epp-stops" role="group" aria-labelledby="epp-l" id="epp-stops"></div>
           <label class="step-field narrow"><span class="sr-only">EPP value 0 to 255</span>
             <input type="number" id="epp" min="0" max="255" step="1" inputmode="numeric" autocomplete="off"></label>
-          <span class="silk tag" id="epp-boot"></span>
+          <span class="meta tag" id="epp-boot"></span>
           <span class="policy-now" id="epp-now"></span>
         </div>
         <div class="policy-item">
           <label class="silk" for="governor">Governor</label>
           <select id="governor"></select>
-          <span class="silk tag" id="gov-boot"></span>
+          <span class="meta tag" id="gov-boot"></span>
           <span class="policy-now" id="gov-now"></span>
         </div>
       </div>
@@ -169,8 +163,8 @@
   <section class="zone zone-gap details" aria-labelledby="details-h">
     <h2 class="sec-title" id="details-h">Details</h2>
     <div class="details-list">
-      <details id="d-cores"><summary><span class="d-name">Cores</span><span class="sum" data-sum></span></summary><div class="d-body"><div class="cores" id="cores"></div></div></details>
-      <details id="d-mem"><summary><span class="d-name">Memory</span><span class="sum" data-sum></span></summary><div class="d-body">
+      <details id="d-cores"><summary><span class="d-name">Cores</span><span class="sum" data-sum aria-hidden="true"></span><span class="sr-only" data-alarm></span></summary><div class="d-body"><div class="cores" id="cores"></div></div></details>
+      <details id="d-mem"><summary><span class="d-name">Memory</span><span class="sum" data-sum aria-hidden="true"></span><span class="sr-only" data-alarm></span></summary><div class="d-body">
         <div class="kv">
           <div><span class="silk">Available</span><b data-mem="avail"></b></div>
           <div><span class="silk">Total visible</span><b data-mem="total"></b></div>
@@ -179,11 +173,11 @@
         </div>
         <table class="grid"><thead><tr><th scope="col">Pressure</th><th scope="col" class="num">10 s %</th><th scope="col" class="num">60 s %</th><th scope="col" class="num">300 s %</th></tr></thead><tbody id="psi"></tbody></table>
       </div></details>
-      <details id="d-sensors"><summary><span class="d-name">Sensors</span><span class="sum" data-sum></span></summary><div class="d-body">
-        <div class="table-tools"><span class="silk" id="stats-since"></span><button class="btn ghost small" id="reset-stats" type="button">Reset min/max</button></div>
+      <details id="d-sensors"><summary><span class="d-name">Sensors</span><span class="sum" data-sum aria-hidden="true"></span><span class="sr-only" data-alarm></span></summary><div class="d-body">
+        <div class="table-tools"><span class="meta" id="stats-since"></span><button class="btn ghost small" id="reset-stats" type="button">Reset min/max</button></div>
         <div class="scroll"><table class="grid"><thead><tr><th scope="col">Sensor</th><th scope="col" class="num">Now °C</th><th scope="col" class="num">Min °C</th><th scope="col" class="num">Max °C</th><th scope="col" class="num">Avg °C</th></tr></thead><tbody id="sensors"></tbody></table></div>
       </div></details>
-      <details id="d-procs"><summary><span class="d-name">Processes</span><span class="sum" data-sum></span></summary><div class="d-body">
+      <details id="d-procs"><summary><span class="d-name">Processes</span><span class="sum" data-sum aria-hidden="true"></span><span class="sr-only" data-alarm></span></summary><div class="d-body">
         <div class="table-tools">
           <label class="filter"><span class="sr-only">Filter processes</span><input type="search" id="proc-filter" placeholder="Filter by name or PID…" autocomplete="off" spellcheck="false"></label>
           <label class="check"><input type="checkbox" id="proc-tree"> Tree</label>
@@ -196,19 +190,24 @@
           <th scope="col" class="num"><button type="button" class="sort" data-sort="gpu_mib">GPU MiB<span class="sort-mark" aria-hidden="true">▾</span></button></th>
           <th scope="col">State</th></tr></thead><tbody id="procs"></tbody></table></div>
       </div></details>
-      <details id="d-llm"><summary><span class="d-name">LLM servers</span><span class="sum" data-sum></span></summary><div class="d-body">
+      <details id="d-llm"><summary><span class="d-name">LLM servers</span><span class="sum" data-sum aria-hidden="true"></span><span class="sr-only" data-alarm></span></summary><div class="d-body">
         <div class="scroll"><table class="grid"><thead><tr><th scope="col">Endpoint</th><th scope="col">Engine</th><th scope="col">Model</th><th scope="col" class="num">tok/s</th><th scope="col" class="num">Running</th></tr></thead><tbody id="llm"></tbody></table></div>
       </div></details>
-      <details id="d-services"><summary><span class="d-name">Services</span><span class="sum" data-sum></span></summary><div class="d-body">
+      <details id="d-services"><summary><span class="d-name">Services</span><span class="sum" data-sum aria-hidden="true"></span><span class="sr-only" data-alarm></span></summary><div class="d-body">
         <div class="table-tools"><span class="muted">Boot values: what gb10-clocklock and cpu-epp set at boot.</span><button class="btn ghost small" id="reapply-boot" type="button">Re-apply boot values</button></div>
         <div class="scroll"><table class="grid"><thead><tr><th scope="col">Unit</th><th scope="col">State</th><th scope="col">At boot</th></tr></thead><tbody id="services"></tbody></table></div>
       </div></details>
-      <details id="d-activity"><summary><span class="d-name">Activity</span><span class="sum" data-sum></span></summary><div class="d-body"><ol class="activity" id="activity"></ol></div></details>
+      <details id="d-activity"><summary><span class="d-name">Activity</span><span class="sum" data-sum aria-hidden="true"></span><span class="sr-only" data-alarm></span></summary><div class="d-body"><ol class="activity" id="activity"></ol></div></details>
     </div>
   </section>
 
   <footer class="foot">
     <button type="button" class="switch" id="keys-switch" aria-pressed="true"><span class="switch-track" aria-hidden="true"></span>Keyboard shortcuts</button>
+    <div class="seg" role="group" aria-label="Theme" id="theme">
+      <button type="button" data-theme-set="auto" aria-pressed="true">Auto</button>
+      <button type="button" data-theme-set="dark" aria-pressed="false">Dark</button>
+      <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+    </div>
     <nav class="foot-out" aria-label="Other dashboards">
       <a class="to-sparkdash" href="#" target="_blank" rel="noopener">sparkDash</a>
       <a class="to-dgx" href="#" target="_blank" rel="noopener">DGX Dashboard</a>
@@ -219,7 +218,6 @@
 <!-- Energy class: a slim tab at the right edge (a pill on a phone) and its drawer. Siblings, both fixed. -->
 <button class="ec-tab" id="ec-tab" type="button" aria-expanded="false" aria-controls="energy" aria-keyshortcuts="E">
   <span class="ec-sw" data-k="" aria-hidden="true"><span data-letter></span></span>
-  <span class="ec-tab-d" data-tabdelta aria-hidden="true"></span>
   <span class="silk ec-tab-word" aria-hidden="true">Energy</span>
   <span class="ec-pill" aria-hidden="true" data-pill>Energy</span>
   <svg class="ec-chev" viewBox="0 0 10 10" aria-hidden="true"><path d="M6.5 2 3.5 5l3 3"/></svg>
@@ -232,7 +230,7 @@
     <div class="t-head">
       <h2 id="energy-h" tabindex="-1">Energy class</h2>
       <button type="button" class="t-link" id="edit-scale">Edit scale</button>
-      <button type="button" class="t-close" id="ec-close" aria-label="Close energy label"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></button>
+      <button type="button" class="t-close" id="ec-close" aria-label="Close energy class"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></button>
     </div>
     <div class="ladder-wrap">
       <ol class="ladder" id="ladder" aria-label="J/token classes, A uses the least energy per token"></ol>

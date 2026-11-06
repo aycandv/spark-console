@@ -22,6 +22,16 @@ from .control import Busy, HelperError
 MAX_BODY = 64 * 1024
 MAX_STREAMS = 8
 TYPES = {".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".woff2": "font/woff2", ".svg": "image/svg+xml"}
+# The page a non-owner gets in a browser. Constant: no request data in it. Inline styles only, because
+# app.css is behind the same check (the CSP allows inline styles, not scripts).
+DENIED_PAGE = b"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<meta name="color-scheme" content="light dark"><title>spark-console</title>
+<style>html{color-scheme:light dark;background:light-dark(#e9ebee,#141619);color:light-dark(#15171a,#eceef1)}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;
+font:16px/1.5 "IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif}p{margin:0;max-width:34em}</style></head>
+<body><p>This console opens only for its owner. Open it through tailscale serve while you are logged in to Tailscale as the owner.</p></body></html>
+"""
 
 
 class App:
@@ -84,6 +94,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(403, f"unknown host {host!r}")
         login = self.headers.get("Tailscale-User-Login")
         if not self.app.owner or login != self.app.owner:
+            if not mutating and not urlsplit(self.path).path.startswith("/api/"):
+                return self._send(403, DENIED_PAGE, "text/html; charset=utf-8")  # a person in a browser
             return self._error(403, "open this console through tailscale serve as its owner")
         if mutating:
             if self.headers.get("X-Spark-Console") != "1" or not (self.headers.get("Content-Type") or "").startswith("application/json"):

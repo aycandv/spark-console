@@ -17,7 +17,7 @@ const port = Number(process.argv[5] || process.env.CDP_PORT || 9333);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 mkdirSync(out, { recursive: true });
 
-const chrome = spawn("google-chrome", ["--headless=new", "--disable-gpu", "--hide-scrollbars", `--remote-debugging-port=${port}`,
+const chrome = spawn("google-chrome", ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--password-store=basic", `--remote-debugging-port=${port}`,
   `--user-data-dir=${mkdtempSync(join(tmpdir(), "ui-smoke-"))}`, "about:blank"], { stdio: "ignore" });
 let ws, id = 0;
 const pending = new Map();
@@ -124,15 +124,24 @@ try {
 
   // --- guard: never point this at the live service ---
   check(await evaluate(`fetch("api/state").then((r) => r.json()).then((s) => s.control?.simulate === true)`), "server runs in simulate mode");
+  const denied = await fetch(url); // Node: no owner header
+  check(denied.status === 403 && /^text\/html/.test(denied.headers.get("content-type")) && /only for its owner/.test(await denied.text()), "a non-owner gets a 403 page, not JSON");
 
   // --- base checks and the dark theme ---
-  check(await evaluate(`document.querySelector("#link").dataset.ok === "1"`), "live stream connected");
+  check(await evaluate(`document.querySelector("#link").dataset.state === "live" && document.documentElement.dataset.link === "live"`), "live stream connected");
   check(await evaluate(`/\\d/.test(document.querySelector("#ch-gpu [data-read]").textContent)`), "GPU read-back shows a number");
   check(await evaluate(`document.querySelectorAll(".readout").length === 6`), "effect rail has 6 readouts");
   check(await evaluate(`document.documentElement.dataset.theme === "auto"`), "theme starts at Auto");
   check(await bodyBg() === "rgb(20, 22, 25)", "Auto + OS dark: dark chassis");
   check(await evaluate(`document.documentElement.dataset.chartTheme === "dark"`), "charts drawn for dark");
   check(!(await isOpen()), "drawer starts closed");
+  // Read-only (no root helper), rendered for one frame: the bar says so and nothing can be staged or saved.
+  check(await evaluate(`(() => { const { S, render } = window.__sc, was = S.control.helper_installed;
+    S.control.helper_installed = false; render(false);
+    const ok = /^Read-only/.test(document.querySelector("#commit-text").textContent)
+      && [...document.querySelectorAll("[data-step], #epp-stops [data-epp], .pf-btn, #apply")].every((b) => b.getAttribute("aria-disabled") === "true")
+      && [...document.querySelectorAll("[data-input], [data-nocap], #epp, #governor, #save-profile")].every((e) => e.disabled);
+    S.control.helper_installed = was; render(false); return ok; })()`), "read-only: the bar says so; controls and Save staged as… are off");
   await shot("desktop-top-dark.png", false);
   await evaluate(`document.querySelectorAll("details").forEach((d) => d.open = true)`);
   await sleep(1500);
@@ -151,6 +160,12 @@ try {
   check(await evaluate(`window.__pf.isConnected`), "profile button node survives 3 ticks");
   check(await evaluate(`window.__row.isConnected`), "sensor row node survives 3 ticks");
   await evaluate(`document.querySelector("#d-sensors").open = false; document.activeElement.blur(); window.scrollTo(0, 0)`);
+
+  // --- a stepper at its limit keeps focus (aria-disabled, not disabled) ---
+  await evaluate(`(() => { const n = document.querySelector("#ch-gpu [data-nocap]"); if (n.checked) n.click(); const i = document.querySelector("#ch-gpu [data-input]"); i.value = "3000"; i.dispatchEvent(new Event("change")); })()`);
+  await evaluate(`(() => { const b = document.querySelector('#ch-gpu [data-step="1"]'); b.focus(); b.click(); })()`);
+  check(await evaluate(`document.querySelector('#ch-gpu [data-step="1"]').getAttribute("aria-disabled") === "true"`) && await activeIs('#ch-gpu [data-step="1"]'), "GPU + at its limit: off, and focus stays on it");
+  await evaluate(`document.querySelector("#discard").click(); document.activeElement.blur()`);
 
   // --- energy drawer, idle: E opens it, the page makes room, Escape closes it and focus comes back ---
   await evaluate(IDLE);
@@ -230,7 +245,9 @@ try {
   // --- trial band, with synthetic decode samples ---
   await evaluate(INJECT);
   check(await startTrial(), "trial running after Apply");
-  check(await evaluate(`document.querySelector("#keep").getAttribute("aria-disabled") === "true"`), "Keep is not armed at once");
+  check(await evaluate(`document.querySelector("#keep").getAttribute("aria-disabled") === "true" && document.querySelector("#commit").hasAttribute("data-arming")`), "Keep is not armed at once (arming)");
+  check(await evaluate(`/^rgb\\(/.test(getComputedStyle(document.querySelector("#commit")).backgroundColor)`), "trial bar background is opaque");
+  check(await evaluate(`/^\\d:\\d\\d trial · spark-console$/.test(document.title)`), "tab title shows the countdown");
   await sleep(50);
   const drain = await evaluate(`new DOMMatrix(getComputedStyle(document.querySelector("#drain")).transform).a`);
   check(drain >= 0.9, `drain starts full, not from 0 (${drain.toFixed(3)})`);
@@ -243,6 +260,7 @@ try {
   await sleep(700);
   check(await evaluate(`document.querySelector("#keep").getAttribute("aria-disabled") === "false"`), "Keep armed after 600 ms");
   check(await evaluate(`document.querySelectorAll(".readout [data-d]:not([hidden])").length === 6`), "every rail readout shows a delta line");
+  check(await evaluate(`[...document.querySelectorAll("body *")].filter((e) => e.children.length === 0 && /measuring… \\d/.test(e.textContent)).length === 1`), "exactly one measuring counter on the page");
   const tabHits = await evaluate(`(() => { const t = document.querySelector("#ec-tab").getBoundingClientRect();
     return [...document.querySelectorAll(".channel, .readout, .policy")].filter((e) => { const r = e.getBoundingClientRect();
       return !(r.right <= t.left || r.left >= t.right || r.bottom <= t.top || r.top >= t.bottom); }).length; })()`);
@@ -251,7 +269,8 @@ try {
   check(await waitFor(`/better/.test(document.querySelector('.readout[data-i="0"] [data-d]').textContent)`, 26000, 250), "GPU power: a signed delta with a verdict after the settle");
   await sleep(1200);
   check(await evaluate(`/D/.test(document.querySelector("[data-letter]").textContent) || /C/.test(document.querySelector("[data-letter]").textContent)`), "tab shows a class letter");
-  check(await evaluate(`/−\\d+%/.test(document.querySelector("[data-tabdelta]").textContent)`), "tab shows the decode change next to the class");
+  check(await evaluate(`/decode slower/.test(document.querySelector("[data-tabname]").textContent) && document.querySelector("#ec-tab").hasAttribute("data-warn")`), "tab names the slower decode and rings the swatch");
+  check(await evaluate(`document.querySelectorAll("#commit-ev .vdot").length === 2 && /decode −\\d+ %/.test(document.querySelector("#commit-ev").textContent)`), "bar evidence: verdict dots and decode in percent");
   await press("e");
   await sleep(400);
   check(await evaluate(`document.querySelectorAll("#trade:not([hidden]) tbody tr").length === 3`), "trade table has 3 rows");
@@ -282,7 +301,7 @@ try {
   await evaluate(`document.activeElement.blur()`);
   await press("k");
   check(await waitFor(`document.querySelector("#commit").dataset.mode === "outcome"`, 3000), "K keeps: outcome mode");
-  check(await evaluate(`/Kept/.test(document.querySelector("#commit-text").textContent)`), "bar reports Kept");
+  check(await evaluate(`/^Kept$/i.test(document.querySelector("#chip-out").textContent) && /^until reboot: GPU cap/.test(document.querySelector("#commit-text").textContent)`), "bar reports Kept until reboot with the values, without repeating the chip word");
   check(await activeIs("#commit-text"), "focus moves to the bar text after Keep");
   await sleep(4500);
   check(await mode() === "idle", "bar returns to idle after the outcome");
