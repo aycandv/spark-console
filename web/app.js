@@ -28,6 +28,11 @@ function glide(el, prop, from, to) {
   el._glide?.cancel();
   el._glide = el.animate([{ [prop]: from }, { [prop]: reduced.matches ? from : to }], { duration: 1000, easing: "linear", fill: "forwards" });
 }
+/* A verdict or a class letter lands once: opacity and a 2 px blur; opacity only with reduced motion. */
+function crossfade(el) {
+  if (reduced.matches) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: "ease" }); return; }
+  el.animate([{ opacity: 0, filter: "blur(2px)" }, { opacity: 1, filter: "blur(0)" }], { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
+}
 const store = {
   get: (k, d = null) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
@@ -326,7 +331,7 @@ function trackTrial() {
     S.trialKey = key;
     S.trialStarted = trialStart(S.snap, t);
     S.armedAt = performance.now() + 600;
-    S.warned = t.remaining_s <= 10;
+    S.warned = t.remaining_s <= 20;
     S.lastRemaining = null;
     S.outcome = null;
     setTimeout(() => renderCommit(), 620);
@@ -365,14 +370,16 @@ function outcomeText(sentence = false) {
   if (!sentence) return words ? `${text} · trial: ${words}` : text;
   return `${o.kind === "kept" ? "Kept" : "Reverted"} ${text}.${words ? ` Trial: ${words}.` : ""}`;
 }
+/* The bar's evidence: the only place that counts the measuring seconds. Verdict dots and words match the rail
+   and the phone pill: "● −13.4 W · ● decode −30 %", "power ≈ same". */
 function evidenceCompact(ev) {
   if (!ev) return "";
   const w = ev["gpu.power_w"], tok = ev["llm.tok_s"];
-  if (w?.state === "measuring") return `<span class="noise">measuring… ${w.wait} s</span>`;
-  const part = (d, unit) => (d.verdict === "within noise" ? `<span class="noise">≈ ${signed(d.d, 1)} ${unit}</span>` : `${signed(d.d, 1)} ${unit}`);
+  if (w?.state === "measuring") return `<span class="noise">measuring…${w.wait ? ` ${w.wait} s` : ""}</span>`;
+  const dot = (d) => (d.verdict === "better" || d.verdict === "worse" ? `<span class="vdot" data-v="${d.verdict}"></span><span class="sr-only">${d.verdict}: </span>` : "");
   const out = [];
-  if (w?.state === "ok") out.push(part(w, "W"));
-  if (tok?.state === "ok") out.push(part(tok, "tok/s"));
+  if (w?.state === "ok") out.push(w.verdict === "within noise" ? '<span class="noise">power ≈ same</span>' : `${dot(w)}${signed(w.d, 1)} W`);
+  if (tok?.state === "ok") out.push(tok.verdict === "within noise" ? '<span class="noise">decode ≈ same</span>' : `${dot(tok)}decode ${signed(tok.pct, 0)} %`);
   else if (tok?.state === "no-decode") out.push('<span class="noise">no decode</span>');
   return out.join(" · ");
 }
@@ -414,7 +421,13 @@ function renderCommit() {
   const bar = $("#commit"), c = S.control || {}, t = c.trial;
   const nStaged = Object.keys(S.staged).length;
   const mode = commitMode();
+  // Apply: the change chips slide from where they were staged (FLIP, the one layout read per mode change).
+  const flip = bar.dataset.mode === "staged" && mode === "trial" && !reduced.matches ? $("#commit-text").getBoundingClientRect().left : null;
   bar.dataset.mode = mode;
+  bar.toggleAttribute("data-urgent", !!t && t.remaining_s <= 10);
+  bar.toggleAttribute("data-arming", !!t && !trialArmed());
+  const title = t ? `${mmss(t.remaining_s)} trial · spark-console` : "spark-console";
+  if (document.title !== title) document.title = title; // a background tab still shows the trial
   if (S.busyLabel) bar.setAttribute("aria-busy", "true"); else bar.removeAttribute("aria-busy");
   setText($("#staged-count"), `${nStaged} staged`);
   const outOn = S.outcome && Date.now() < S.outcome.until;
@@ -429,11 +442,10 @@ function renderCommit() {
       : Object.keys(t.applied).map((k) => chgHTML(k, t.prev[k], t.applied[k])).join("");
     ev = t.revert_error ? "" : evidenceCompact(S.ev);
     setText($("#countdown"), mmss(t.remaining_s));
-    const urgent = t.remaining_s <= 10;
-    // DOM order is the reading order: "Reverting in 0:09" or "1:00 to revert".
-    $("#countdown-pre").hidden = !urgent;
-    $("#countdown-l").hidden = urgent;
-    if (urgent && !S.warned) { S.warned = true; announce("Trial: 10 seconds left. Keep, or the old values return."); }
+    if (t.remaining_s <= 20 && !S.warned) {
+      S.warned = true;
+      announce(`20 seconds left in the trial. Press ${S.keys ? "K or " : ""}Keep to keep these values.`);
+    }
     if (S.lastRemaining !== t.remaining_s) {
       S.lastRemaining = t.remaining_s;
       const f = (r) => `scaleX(${Math.max(0, r) / (t.total_s || 1)})`;
@@ -452,6 +464,10 @@ function renderCommit() {
   }
   setHTML($("#commit-text"), html);
   setHTML($("#commit-ev"), ev);
+  // The verdict lands once, when the bar stops counting.
+  const phase = !ev ? "" : S.ev?.["gpu.power_w"]?.state === "measuring" ? "wait" : "ok";
+  if (S.evPhase === "wait" && phase === "ok") crossfade($("#commit-ev"));
+  S.evPhase = phase;
   // Keep stays enabled with no live data: a POST may still get through, and a blocked Keep could lose a change.
   const second = $("#commit-second");
   const lines = [t && (S.link === "lost" || S.link === "stale") && "No live data, so the countdown here is stopped. The server still reverts this trial on time unless Keep gets through.",
@@ -476,6 +492,10 @@ function renderCommit() {
     setText(lab, S.busyLabel && S.busy === action ? busyText : lab.dataset.idle);
   }
   $("#reapply-boot").disabled = !!S.busy || !!t || !c.helper_installed;
+  if (flip != null) {
+    const dx = flip - $("#commit-text").getBoundingClientRect().left;
+    if (dx) $("#commit-text").animate([{ transform: `translateX(${dx}px)` }, { transform: "none" }], { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
+  }
   const err = $("#commit-error");
   err.hidden = !S.error;
   setText(err, S.error);
@@ -701,7 +721,7 @@ function buildRail() {
 }
 function deltaLine(r, d) {
   if (!d) return null;
-  if (d.state === "measuring") return { v: "wait", html: `measuring… ${d.wait} s` };
+  if (d.state === "measuring") return { v: "wait", html: "measuring" }; // the bar holds the one count
   if (d.state === "no-decode") return { v: "wait", html: "no decode traffic" };
   if (d.state === "below-min") return { v: "wait", html: `no class: decode below ${fmt(d.min)} tok/s` };
   const pct = r.key === "llm.tok_s" && d.verdict !== "within noise" && d.pct != null ? ` (${signed(d.pct, 0)} %)` : "";
@@ -721,7 +741,11 @@ function renderRail() {
     const m = $("[data-m]", el), dl = $("[data-d]", el);
     m.hidden = !!line;
     dl.hidden = !line;
-    if (line) { dl.dataset.v = line.v; setHTML(dl, line.html); } else setText(m, r.meta(s));
+    if (line) {
+      if (dl.dataset.v === "wait" && line.v !== "wait") queueMicrotask(() => crossfade(dl));
+      dl.dataset.v = line.v;
+      setHTML(dl, line.html);
+    } else setText(m, r.meta(s));
   });
 }
 
@@ -863,7 +887,6 @@ function energyView() {
     v.trial = { remaining: t.remaining_s, total: t.total_s, key: S.trialKey };
     v.before = ct.before;
     v.now = ct.now;
-    v.wait = ct.wait;
     v.deltas = S.ev ? { j: S.ev["llm.j_per_tok"], tok: S.ev["llm.tok_s"], w: S.ev["gpu.power_w"] } : null;
     if (t.revert_error) v.state = "hold";
     else if (ct.state === "ok") v.state = ct.before ? "trial" : "ok";
@@ -1060,7 +1083,7 @@ async function start() {
   renderLinks();
   buildPolicy();
   energy = initEnergy({
-    fmt, signed, announce, reduced, glide,
+    fmt, signed, announce, reduced, glide, crossfade,
     onScale: (scale) => { S.scale = scale; store.set("sc-energy-scale", JSON.stringify(scale)); render(false); },
   });
   energy.init(S.scale);

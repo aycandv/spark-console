@@ -30,12 +30,12 @@
   /* amber: staged or trial, nothing else */
   --amber-text: light-dark(#8f5200, #f0a032);
   --amber-edge: light-dark(#b06a00, #f0a032);
-  --amber-wash: light-dark(rgba(217, 132, 0, 0.14), rgba(240, 160, 50, 0.14));
+  --amber-wash: light-dark(#e7ddcd, #33291c); /* opaque: 14 % amber over the chassis, so nothing prints through the sticky bar */
   --amber-chip: light-dark(#8f5200, #f0a032);
   --amber-chip-ink: light-dark(#ffffff, #141619);
   /* lamps: status, never text colour (except --lamp-serious for error text) */
   --lamp-crit: light-dark(#b42323, #e5534b);
-  --lamp-serious: light-dark(#b2441c, #ec835a);
+  --lamp-serious: light-dark(#9c3a16, #ec835a); /* 5.2:1 on the trial wash, 5.8:1 on the chassis */
   --lamp-ok: light-dark(#16801a, #0ca30c);
   --focus: var(--ink);
   --primary-hover: light-dark(#2b2f36, #ffffff);
@@ -131,7 +131,7 @@ kbd { font: 500 var(--t-11)/1 "Plex Cond", sans-serif; letter-spacing: 0.04em; p
 .commit {
   position: sticky; top: 48px; z-index: 15; padding: var(--s3) var(--s6); min-height: 64px;
   background: var(--chassis); border-bottom: 1px solid var(--rule); border-top: 2px solid transparent; margin-top: -2px;
-  transition: background-color 400ms var(--ease);
+  transition: background-color var(--dur-swap) var(--ease);
 }
 .commit-row { display: flex; align-items: center; gap: var(--s4); flex-wrap: wrap; min-height: 40px; }
 .commit-lead { display: flex; align-items: center; gap: var(--s3); }
@@ -146,6 +146,7 @@ kbd { font: 500 var(--t-11)/1 "Plex Cond", sans-serif; letter-spacing: 0.04em; p
 .commit-ev { font-weight: 600; color: var(--ink); white-space: nowrap; }
 .commit-ev:empty { display: none; }
 .commit-ev .noise { font-weight: 400; color: var(--ink-3); }
+.commit-ev .vdot { margin-right: 4px; transform: translateY(-1px); }
 .commit-actions { display: flex; align-items: center; gap: var(--s2); margin-left: auto; }
 .commit[data-mode="idle"] #commit-staged, .commit[data-mode="outcome"] #commit-staged { display: none; }
 .commit-second { margin-top: var(--s2); color: var(--ink-2); }
@@ -153,6 +154,14 @@ kbd { font: 500 var(--t-11)/1 "Plex Cond", sans-serif; letter-spacing: 0.04em; p
 .commit-error { color: var(--lamp-serious); margin-top: var(--s2); }
 .staged-count { color: var(--amber-text); font-size: var(--t-16); font-weight: 600; white-space: nowrap; }
 .countdown { font-size: var(--t-28); font-weight: 600; line-height: 1; color: var(--amber-text); letter-spacing: -0.01em; min-width: 2.6ch; }
+/* urgent (10 s or less): more weight inside amber, never red; the negative margin keeps the digits in place */
+.commit[data-urgent] .countdown { background: var(--amber-chip); color: var(--amber-chip-ink); padding: 2px 6px; margin: -2px -6px; border-radius: var(--r-ctl); }
+.commit[data-urgent] .drain { height: 6px; }
+/* arming (first 600 ms): the actions keep full ink and Keep fills a 2 px bar, so the wait reads as a wait */
+.commit[data-arming] .commit-actions .btn[aria-disabled="true"] { opacity: 1; }
+#keep { position: relative; overflow: hidden; }
+.commit[data-arming] #keep::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: currentColor; transform-origin: left; animation: arm 600ms linear both; }
+@keyframes arm { from { transform: scaleX(0); } }
 /* staged: a dashed amber edge (hollow); trial: amber wash, filled chip, countdown and a 4 px drain (solid) */
 .commit[data-mode="staged"] { border-bottom: 1px dashed var(--amber-edge); }
 .commit[data-mode="staged"] .staged-count { display: inline; }
@@ -190,7 +199,9 @@ kbd { font: 500 var(--t-11)/1 "Plex Cond", sans-serif; letter-spacing: 0.04em; p
 .btn:hover { background: var(--bezel); }
 .btn:active { transform: scale(0.97); }
 .btn:disabled { color: var(--ink-4); cursor: not-allowed; background: var(--panel); border-color: var(--rule-strong); }
-.btn[aria-disabled="true"] { opacity: 0.5; pointer-events: none; }
+/* no pointer-events: none, so the not-allowed cursor shows; every handler checks aria-disabled */
+.btn[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
+.btn[aria-disabled="true"]:active { transform: none; }
 .btn.primary { background: var(--ink); color: var(--chassis); border-color: var(--ink); }
 .btn.primary:hover { background: var(--primary-hover); }
 .btn.primary:disabled { background: var(--bezel); color: var(--ink-4); border-color: var(--rule-strong); }
@@ -454,9 +465,7 @@ dialog h2 { font-size: var(--t-18); }
 }
 .ec-sw[data-k=""] { display: none; } /* no class: no swatch, only the word */
 .ec-sw[data-dim="1"] { background: transparent; color: var(--ink-3); box-shadow: inset 0 0 0 1px var(--rule-strong); }
-.ec-tab-d { font-size: var(--t-11); font-weight: 600; letter-spacing: -0.03em; line-height: 1; white-space: nowrap; }
-.ec-tab-d[data-noise="1"] { color: var(--ink-3); font-size: var(--t-14); font-weight: 400; }
-.ec-tab-d:empty { display: none; }
+.ec-tab[data-warn] .ec-sw { outline: 2px solid var(--lamp-serious); outline-offset: 2px; }
 .ec-tab-word { writing-mode: vertical-rl; transform: rotate(180deg); margin-top: auto; }
 .ec-chev { width: 10px; height: 10px; flex: none; }
 .ec-chev path { fill: none; stroke: var(--ink-3); stroke-width: 1.5; }
@@ -487,7 +496,7 @@ dialog h2 { font-size: var(--t-18); }
 .burn-track { stroke: rgba(22, 24, 27, 0.14); stroke-width: 1 !important; }
 .burn-run { stroke: var(--paper-ink); stroke-dasharray: 100 100; stroke-dashoffset: 0; }
 .ticket[data-frame="trial"] .burn-run { stroke: var(--paper-amber); }
-.ticket[data-frame="urgent"] .burn-run { stroke: var(--paper-serious); }
+.ticket[data-frame="urgent"] .burn-run { stroke: var(--paper-amber); stroke-width: 4; } /* time is amber; red is for a fault */
 .ticket[data-frame="hold"] .burn-run { stroke: var(--paper-serious); stroke-dasharray: 1 0.8; }
 .t-head { display: flex; align-items: center; gap: var(--s3); position: relative; }
 .t-head h2 { font-size: var(--t-22); font-weight: 600; letter-spacing: -0.01em; margin-right: auto; }
@@ -609,7 +618,7 @@ dialog h2 { font-size: var(--t-18); }
   .ec-tab[aria-expanded="true"] { transform: none; }
   .ec-tab::before { inset: 0; }
   .ec-edge { display: none !important; }
-  .ec-tab-d, .ec-tab-word, .ec-chev { display: none !important; }
+  .ec-tab-word, .ec-chev { display: none !important; }
   .ec-tab:has(.ec-sw[data-k=""]) { padding-left: 14px; }
   .ec-pill { display: inline; font-weight: 600; white-space: nowrap; }
   .ec {
@@ -636,6 +645,7 @@ dialog h2 { font-size: var(--t-18); }
 /* --- reduced motion: no spatial motion; colour and opacity stay, at most 150 ms --------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
   .btn:active, .step:active, .ec-tab:active { transform: none; }
+  .commit { transition-duration: var(--dur-state); }
   .ec-tab:hover, .ec-tab:active { translate: none !important; }
   .ec-tab, .ec-tab[aria-expanded="true"] { transition: background-color 120ms var(--ease); }
   .ec, .ec[data-open] { transform: none !important; opacity: 0; transition: opacity 120ms ease, visibility 0s linear 120ms; }

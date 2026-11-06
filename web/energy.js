@@ -8,7 +8,7 @@ const setText = (el, t) => { if (el.textContent !== t) el.textContent = t; };
 const setHTML = (el, h) => { if (el._h !== h) { el.innerHTML = h; el._h = h; } };
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-export function initEnergy({ fmt, signed, announce, reduced, glide, onScale }) {
+export function initEnergy({ fmt, signed, announce, reduced, glide, crossfade, onScale }) {
   const tab = $("#ec-tab"), aside = $("#energy"), ticket = $("#ticket"), main = $("#main");
   const phone = matchMedia("(max-width: 720px)");
   const edge = document.createElement("span");
@@ -24,22 +24,19 @@ export function initEnergy({ fmt, signed, announce, reduced, glide, onScale }) {
     $("#ladder").innerHTML = [...LETTERS].map((L, k) => `<li data-k="${k}"><span class="rung" data-k="${k}" style="--i:${k}"><b>${L}</b><span class="rung-tag" aria-hidden="true"></span></span><span class="sr-only">, ${bandText(k, scale)} J/token<span data-mark></span></span></li>`).join("");
   }
 
-  /* --- one-shot motion helpers -------------------------------------------------------------------------- */
-  const crossfade = (el) => {
-    if (reduced.matches) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: "ease" }); return; }
-    el.animate([{ opacity: 0, filter: "blur(2px)" }, { opacity: 1, filter: "blur(0)" }], { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
-  };
+  /* --- one-shot motion helper (crossfade comes from app.js) ------------------------------------------- */
   const peek = () => {
     if (reduced.matches || isOpen() || phone.matches) return;
     tab.animate([{ translate: "0 0" }, { translate: "-8px 0", offset: 0.45 }, { translate: "0 0" }], { duration: 440, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
   };
 
   /* --- render ---------------------------------------------------------------------------------------------- */
+  /* word: changes on verdict events only, so the tab's accessible name does not change every tick */
   function decodeWords(tok) {
     if (!tok || tok.state !== "ok") return null;
-    if (tok.verdict === "within noise") return { short: "≈", noise: true, sr: "decode within noise", pill: "decode ≈ same" };
-    const p = Math.round(Math.abs(tok.pct));
-    return { short: `${signed(Math.round(tok.pct), 0)}%`, sr: `decode ${p} % ${tok.pct < 0 ? "slower" : "faster"}`, pill: `decode ${signed(Math.round(tok.pct), 0)} %` };
+    if (tok.verdict === "within noise") return { word: "within noise", noise: true, sr: "decode within noise", pill: "decode ≈ same" };
+    const p = Math.round(Math.abs(tok.pct)), word = tok.pct < 0 ? "slower" : "faster";
+    return { word, sr: `decode ${p} % ${word}`, pill: `decode ${signed(Math.round(tok.pct), 0)} %` };
   }
   const part = (d, unit, digits) => {
     if (!d || d.state !== "ok") return "";
@@ -65,12 +62,9 @@ export function initEnergy({ fmt, signed, announce, reduced, glide, onScale }) {
       if (lastLetter != null) crossfade(letter);
       lastLetter = L;
     }
-    const td = $("[data-tabdelta]", tab);
-    setText(td, dw ? dw.short : "");
-    td.dataset.noise = dw?.noise ? "1" : "0";
-    const name = `Energy class ${showK == null ? "not measured" : L}${dw ? `, ${dw.sr}` : ""}`;
-    setText($("[data-tabname]", tab), name);
-    if (tab.title !== name) tab.title = name;
+    // A better class that hides a slower decode is a state on the swatch, not an unlabelled number.
+    tab.toggleAttribute("data-warn", !!v.honesty);
+    setText($("[data-tabname]", tab), `Energy class ${showK == null ? "not measured" : L}${dw ? `, decode ${dw.word}` : ""}`);
     setText($("[data-pill]", tab), inTrial && dw ? dw.pill : "Energy class");
     tab.dataset.trial = inTrial ? "1" : "0";
 
@@ -120,6 +114,7 @@ export function initEnergy({ fmt, signed, announce, reduced, glide, onScale }) {
     let line, state = "";
     if (st === "hold") { line = "Class on hold"; state = "The class is on hold until the revert succeeds."; }
     else if (st === "warming") { line = `Measuring · ${fmt(v.tokNow, 1)} tok/s`; state = `Measuring the class… ${v.warmN ?? 0} of ${MIN_N} decode samples.`; }
+    else if (st === "idle" && v.tokNow == null) { line = "No class · no LLM server answering"; state = "The class needs decode from an LLM server."; }
     else if (st === "idle") { line = `No class · ${fmt(v.tokNow, 1)} tok/s`; state = `No decode traffic: the class needs ${fmt(scale.min)} tok/s or more.`; }
     else if (st === "below") {
       line = [`Was ${LETTERS[beforeK]} → no class`, part(v.deltas?.w, "W", 1), dw ? dw.pill : `now ${fmt(v.tokNow, 1)} tok/s`].filter(Boolean).join(" · ");
@@ -127,7 +122,7 @@ export function initEnergy({ fmt, signed, announce, reduced, glide, onScale }) {
     }
     else if (st === "settling") {
       line = `${beforeK != null ? `Was ${LETTERS[beforeK]} · ${fmt(v.before.median, 2)} J/token` : "Measuring"} · now ${fmt(v.tokNow, 1)} tok/s`;
-      state = v.wait > 0 ? `Measuring the new values… ${v.wait} s` : "Measuring the new values… waiting for decode samples.";
+      state = "Measuring the new values…"; // the commit bar holds the one count
     } else if (st === "trial") {
       line = [`${LETTERS[beforeK]} → ${LETTERS[nowK]}`, part(v.deltas?.w, "W", 1), part(tok, "tok/s", 1) || `now ${fmt(v.tokNow, 1)} tok/s`].filter(Boolean).join(" · ");
     } else {
