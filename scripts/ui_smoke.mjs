@@ -126,7 +126,7 @@ try {
   check(await evaluate(`fetch("api/state").then((r) => r.json()).then((s) => s.control?.simulate === true)`), "server runs in simulate mode");
 
   // --- base checks and the dark theme ---
-  check(await evaluate(`document.querySelector("#link").dataset.ok === "1"`), "live stream connected");
+  check(await evaluate(`document.querySelector("#link").dataset.state === "live" && document.documentElement.dataset.link === "live"`), "live stream connected");
   check(await evaluate(`/\\d/.test(document.querySelector("#ch-gpu [data-read]").textContent)`), "GPU read-back shows a number");
   check(await evaluate(`document.querySelectorAll(".readout").length === 6`), "effect rail has 6 readouts");
   check(await evaluate(`document.documentElement.dataset.theme === "auto"`), "theme starts at Auto");
@@ -282,7 +282,7 @@ try {
   await evaluate(`document.activeElement.blur()`);
   await press("k");
   check(await waitFor(`document.querySelector("#commit").dataset.mode === "outcome"`, 3000), "K keeps: outcome mode");
-  check(await evaluate(`/Kept/.test(document.querySelector("#commit-text").textContent)`), "bar reports Kept");
+  check(await evaluate(`/^Kept$/i.test(document.querySelector("#chip-out").textContent) && /^until reboot: GPU cap/.test(document.querySelector("#commit-text").textContent)`), "bar reports Kept until reboot with the values, without repeating the chip word");
   check(await activeIs("#commit-text"), "focus moves to the bar text after Keep");
   await sleep(4500);
   check(await mode() === "idle", "bar returns to idle after the outcome");

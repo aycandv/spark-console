@@ -55,6 +55,8 @@
   /* 4 px grid */
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s6: 24px; --s8: 32px; --s10: 40px;
   --r-ctl: 4px; --r-strip: 8px; --r-dialog: 12px;
+  /* motion: one scale; exits are never slower than entrances */
+  --dur-press: 100ms; --dur-state: 150ms; --dur-swap: 200ms; --dur-in: 300ms; --dur-out: 200ms;
   --ease: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --drawer-w: 340px;
@@ -99,10 +101,13 @@ kbd { font: 500 var(--t-11)/1 "Plex Cond", sans-serif; letter-spacing: 0.04em; p
 }
 .ident { display: flex; align-items: baseline; gap: var(--s3); font-size: inherit; white-space: nowrap; }
 .host { font-size: var(--t-18); font-weight: 600; letter-spacing: -0.01em; }
-.link-state { display: flex; align-items: center; gap: var(--s2); color: var(--ink-3); font-size: var(--t-11); letter-spacing: 0.07em; text-transform: uppercase; white-space: nowrap; }
-.link-state .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-4); flex: none; }
-.link-state[data-ok="1"] .dot { background: var(--lamp-ok); }
-.link-state[data-ok="0"] .dot { background: var(--lamp-serious); }
+.link-state { display: flex; align-items: center; gap: var(--s2); color: var(--ink-3); font-size: var(--t-12); letter-spacing: 0.01em; white-space: nowrap; }
+/* connecting: hollow ink-4; live: filled green; stale: hollow ink-2; lost: filled red */
+.link-state .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ink-4); flex: none; }
+.link-state[data-state="live"] .dot { background: var(--lamp-ok); border-color: var(--lamp-ok); }
+.link-state[data-state="stale"] .dot { border-color: var(--ink-2); }
+.link-state[data-state="lost"] .dot { background: var(--lamp-serious); border-color: var(--lamp-serious); }
+.link-state[data-state="stale"], .link-state[data-state="lost"] { color: var(--ink-2); }
 .annun {
   display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 0 var(--s2); border-radius: 999px;
   border: 1px solid var(--rule-strong); background: transparent; cursor: pointer;
@@ -222,6 +227,11 @@ main > * { min-width: 0; }
   /* the open drawer takes its own column: nothing in the tab order hides under it */
   html:has(#energy[data-open]) main { padding-right: calc(var(--drawer-w) + 48px); }
 }
+
+/* --- liveness: when the data is not live, every live reading dims ------------------------------------ */
+.read-val, .read-sub, .trace, .r-val, .r-meta, .r-delta, .spark, .countdown, .commit-ev, .drain, .cell b, .kv b, .ec-sw { transition: opacity var(--dur-state) var(--ease); }
+html:is([data-link="stale"], [data-link="lost"]) :is(.read-val, .read-sub, .trace, .r-val, .r-meta, .r-delta,
+  .spark, .countdown, .commit-ev, .drain, .cell b, .kv b, .ec-sw) { opacity: 0.45; }
 
 /* --- profiles ------------------------------------------------------------------------------------------------ */
 .profile-row { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
@@ -547,9 +557,13 @@ dialog h2 { font-size: var(--t-18); }
 /* --- phone ------------------------------------------------------------------------------------------------------------------ */
 @media (max-width: 720px) {
   .top { padding: 0 var(--s4); gap: var(--s3); }
-  .out, .ident .silk, .link-state #link-text { display: none; }
-  .link-state::after { content: "Live"; }
-  .link-state[data-ok="0"]::after { content: "Offline"; }
+  .out, .ident .silk { display: none; }
+  /* the short word is decoration; the full status stays in the sr-only text */
+  .link-state #link-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .link-state::after { content: "Connecting" / ""; }
+  .link-state[data-state="live"]::after { content: "Live" / ""; }
+  .link-state[data-state="stale"]::after { content: "Stale" / ""; }
+  .link-state[data-state="lost"]::after { content: "Offline" / ""; }
   .theme-seg { margin-left: auto; }
   .theme-seg button { padding: 0 8px; }
   main, .commit { padding-left: var(--s4); padding-right: var(--s4); }

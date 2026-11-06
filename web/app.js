@@ -1,6 +1,6 @@
 /* spark-console client (ES module). One SSE stream drives everything; controls stage values,
    Apply opens a trial on the server, Keep / Revert close it. Nodes are built once and patched per tick. */
-import { trialStart, trialDelta, classNow, classTrial, honesty, loadScale, trialOutcome, SETTLE_S } from "./metrics.js";
+import { trialStart, trialDelta, classNow, classTrial, honesty, loadScale, trialOutcome, SETTLE_S, linkState, revertReason, errorText } from "./metrics.js";
 import { initEnergy } from "./energy.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -49,7 +49,7 @@ const chgHTML = (k, from, to) => `<span class="chg">${esc(LABEL[k])} <span class
 
 const S = {
   snap: null, control: null, profiles: [], staged: {}, stagedProfile: null, window: 120, sort: "cpu",
-  busy: null, busyLabel: false, error: "", clamp: null,
+  busy: null, busyLabel: false, error: "", errorNet: false, clamp: null, link: null, gotAt: 0,
   trialKey: null, trialStarted: null, armedAt: 0, warned: false, lastRemaining: null, ev: null, lastEvidence: null, outcome: null,
   scale: loadScale(store.get("sc-energy-scale")), keys: store.get("sc-keys", "on") !== "off",
 };
@@ -231,16 +231,6 @@ function labelTraces() {
 
 /* --- network ------------------------------------------------------------------------------------------------------------ */
 const BUSY = { apply: ["#apply", "Applying…"], keep: ["#keep", "Keeping…"], "keep-boot": ["#keep-boot", "Keeping…"], revert: ["#revert", "Reverting…"] };
-/* The machine state after a failure differs per action, so the copy does too. */
-function errorText(e, action) {
-  if (e.status === 409 && action === "apply") return "A trial is already open: Keep or Revert it first.";
-  if (e.status !== 502) return `Failed: ${e.message}`;
-  const why = e.message.replace(/^helper failed: /, "");
-  if (action === "apply") return `The helper failed: ${why}. The old values are still set.`;
-  if (action === "keep-boot") return `Kept until reboot; saving for boot failed: ${why}.`;
-  if (action === "revert") return `Revert failed: ${why}. The trial values are still set; the server retries.`;
-  return `The helper failed: ${why}.`;
-}
 async function post(path, body = {}, action = path) {
   S.busy = action;
   S.busyLabel = false;
@@ -250,12 +240,14 @@ async function post(path, body = {}, action = path) {
   try {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Spark-Console": "1" }, body: JSON.stringify(body) });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw Object.assign(new Error(data.error || `HTTP ${r.status}`), { status: r.status });
+    // server: the console server answered with its own error (a proxy 502 or a fetch failure has none).
+    if (!r.ok) throw Object.assign(new Error(data.error || `HTTP ${r.status}`), { status: r.status, server: !!data.error });
     if (data.control) S.control = data.control;
     if (data.profiles) S.profiles = data.profiles;
     return data;
   } catch (e) {
     S.error = errorText(e, action);
+    S.errorNet = !e.server;
     S.errorAction = action;
     throw e;
   } finally {
@@ -265,25 +257,48 @@ async function post(path, body = {}, action = path) {
   }
 }
 
+/* One link state drives the header word, the dot and the dimming of every live reading. It is written only
+   on a change, so the polite status region speaks once. Age is time since the last message on this clock,
+   so a phone with a skewed clock is not "stale" for ever. */
+let linkOpen = null;
+const LINK_TEXT = { connecting: "Connecting…", live: "Live · 1 s", stale: "Stale data", lost: "Reconnecting…" };
+function setLink() {
+  const st = linkState({ open: linkOpen, age: S.gotAt ? (Date.now() - S.gotAt) / 1000 : null });
+  if (st === S.link) return;
+  S.link = st;
+  document.documentElement.dataset.link = st;
+  $("#link").dataset.state = st;
+  $("#link-text").textContent = LINK_TEXT[st];
+  render(false);
+}
 function connect() {
-  const link = $("#link"), text = $("#link-text");
   const es = new EventSource("api/stream");
-  es.onopen = () => { link.dataset.ok = "1"; text.textContent = "Live · 1 s"; };
-  es.onerror = () => { link.dataset.ok = "0"; text.textContent = "Reconnecting…"; };
+  es.onopen = () => {
+    linkOpen = true;
+    // A request that got no answer is stale news once the server is back: show the trial outcome instead.
+    if (S.errorNet) { S.error = ""; S.errorNet = false; }
+    setLink();
+  };
+  es.onerror = () => {
+    linkOpen = false;
+    setLink();
+    // After a non-200 answer (a 502 from tailscale serve while the server restarts) the browser gives up.
+    // shortcut: fixed 3 s retry, add backoff if many tabs hammer a down server
+    if (es.readyState === EventSource.CLOSED) { es.close(); setTimeout(connect, 3000); }
+  };
   es.onmessage = (ev) => {
     const st = JSON.parse(ev.data);
     if (st.snapshot?.series) pushHistory(st.snapshot.t, st.snapshot.series);
     ingest(st);
+    setLink();
   };
-  setInterval(() => {
-    if (S.snap && Date.now() / 1000 - S.snap.t > 5 && link.dataset.ok === "1") text.textContent = "Stale data";
-  }, 2000);
 }
 
 function ingest(st) {
   // Simulate mode only: a handle for scripts/ui_smoke.mjs to feed synthetic decode samples.
   if (st.control?.simulate && !window.__sc) window.__sc = { H, S, render };
   S.snap = st.snapshot;
+  S.gotAt = Date.now();
   S.control = st.control;
   S.profiles = st.profiles;
   // Drop staged values that the machine now has anyway.
@@ -319,7 +334,7 @@ function trackTrial() {
     S.trialKey = null;
     S.trialStarted = null;
     S.outcome = { ...trialOutcome(S.control?.events || []), until: Date.now() + 4000, evidence: S.lastEvidence };
-    announce(outcomeText());
+    announce(outcomeText(true));
     // Ended by the timeout or elsewhere: the Keep/Revert row is about to hide, so do not lose focus with it.
     if ($("#commit-trial").contains(document.activeElement)) queueMicrotask(() => $("#commit-text").focus({ preventScroll: true }));
     setTimeout(() => render(false), 4050);
@@ -336,16 +351,19 @@ function evidenceWords(ev) {
   if (tok?.state === "ok") parts.push(tok.verdict === "within noise" ? "decode within noise" : `decode ${signed(tok.pct, 0)} %`);
   return parts.join(", ");
 }
-function outcomeText() {
+/* The outcome after the chip word ("Kept" / "Reverted"), so the bar does not repeat it. sentence: the
+   full text with the chip word, for the announcement. */
+function outcomeText(sentence = false) {
   const o = S.outcome;
   if (!o) return "";
-  const e = o.ev || {};
-  let head;
-  if (o.kind === "kept") head = o.boot === "saved" ? "Kept and saved for boot" : o.boot === "failed" ? "Kept until reboot · saving for boot failed" : "Kept until reboot";
-  else if (e.kind === "trial_dropped_by_reboot") head = "Trial ended by a reboot";
-  else head = e.why === "timeout" ? "Reverted: not kept in time" : e.why === "user" ? "Reverted" : `Reverted (${e.why || "ended"})`;
+  const e = o.ev, vals = changeList(e?.values || {});
+  let text;
+  if (o.kind === "kept") text = o.boot === "saved" ? `and saved for boot: ${vals}` : o.boot === "failed" ? `until reboot; saving for boot failed: ${vals}` : `until reboot: ${vals}`;
+  else if (e?.kind === "trial_dropped_by_reboot") text = `${revertReason(e)}, the boot values apply`;
+  else text = [revertReason(e), e?.values && `back to ${vals}`].filter(Boolean).join(", ");
   const words = evidenceWords(o.evidence);
-  return words ? `${head} · ${words}` : head;
+  if (!sentence) return words ? `${text} · trial: ${words}` : text;
+  return `${o.kind === "kept" ? "Kept" : "Reverted"} ${text}.${words ? ` Trial: ${words}.` : ""}`;
 }
 function evidenceCompact(ev) {
   if (!ev) return "";
@@ -434,9 +452,12 @@ function renderCommit() {
   }
   setHTML($("#commit-text"), html);
   setHTML($("#commit-ev"), ev);
+  // Keep stays enabled with no live data: a POST may still get through, and a blocked Keep could lose a change.
   const second = $("#commit-second");
-  second.hidden = !(t && nStaged);
-  if (t && nStaged) setHTML(second, `<b>${nStaged} staged</b> · apply after this trial ends`);
+  const lines = [t && (S.link === "lost" || S.link === "stale") && "No live data, so the countdown here is stopped. The server still reverts this trial on time unless Keep gets through.",
+    t && nStaged && `<b>${nStaged} staged</b> · apply after this trial ends`].filter(Boolean);
+  second.hidden = !lines.length;
+  setHTML(second, lines.join("<br>"));
 
   $("#commit-trial").hidden = !t;
   $("#commit-staged").hidden = !!t || !nStaged;
@@ -463,7 +484,7 @@ function renderCommit() {
 function eventText(e) {
   switch (e.kind) {
     case "applied": return `Trial started: ${changeList(e.applied)}`;
-    case "reverted": return `Reverted${e.why === "timeout" ? " (not kept in time)" : e.why === "user" ? "" : ` (${e.why})`}: ${changeList(e.values)}`;
+    case "reverted": { const why = revertReason(e); return `Reverted${why ? ` (${why})` : ""}: ${changeList(e.values)}`; }
     case "kept": return `Kept${e.persist ? " after reboot" : " until reboot"}: ${changeList(e.values)}`;
     case "persisted": return `Saved for boot: ${[e.gpu && "GPU", e.cpu && "CPU"].filter(Boolean).join(" + ")}`;
     case "failed": return `Failed: ${e.error}`;
@@ -1057,9 +1078,9 @@ async function start() {
     const [hist, st] = await Promise.all([fetch("api/history?window=3600").then((r) => r.json()), fetch("api/state").then((r) => r.json())]);
     seedHistory(hist);
     if (st.snapshot) ingest(st);
-  } catch (e) {
-    $("#link-text").textContent = `Cannot reach server: ${e.message}`;
-  }
+  } catch { /* the stream and the header carry the state */ }
+  setLink();
+  setInterval(setLink, 1000);
   // An EventSource opened before `load` keeps the page "loading" (spinner, headless screenshots).
   if (document.readyState === "complete") connect();
   else addEventListener("load", connect, { once: true });
