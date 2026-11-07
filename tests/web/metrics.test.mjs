@@ -240,3 +240,15 @@ test("errorText names the console server or the helper", () => {
     "Kept until reboot; saving for boot failed: no sudo.");
   assert.equal(errorText({ status: 409, server: true, message: "a trial is open" }, "apply"), "A trial is already open: Keep or Revert it first.");
 });
+
+// Each failed action has to say what the user is left with, so the sentence differs per action.
+test("errorText tells the user what is still set", () => {
+  assert.equal(errorText({ status: 502, server: true, message: "helper failed: gpu lock busy" }, "apply"),
+    "The root helper failed: gpu lock busy. The old values are still set.");
+  assert.equal(errorText({ status: 502, server: true, message: "helper failed: gpu lock busy" }, "revert"),
+    "Revert failed: gpu lock busy. The trial values are still set; the server retries.");
+  assert.equal(errorText({ status: 502, server: true, message: "helper failed: bad value" }, "profile"),
+    "The root helper failed: bad value.", "an action with no special state gets the plain sentence");
+  assert.equal(errorText({ status: 500, server: true, message: "boom" }, "apply"), "Failed: boom",
+    "a server error that is not the helper keeps its own words");
+});
