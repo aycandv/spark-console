@@ -37,7 +37,7 @@ const shot = async (name, full = true) => {
   writeFileSync(join(out, name), Buffer.from(data, "base64"));
 };
 const check = (cond, msg) => { if (!cond) throw new Error(`check failed: ${msg}`); console.log(`ok - ${msg}`); };
-const KEYS = { e: [69, "KeyE"], k: [75, "KeyK"], Escape: [27, "Escape"] };
+const KEYS = { e: [69, "KeyE"], k: [75, "KeyK"], Escape: [27, "Escape"], Enter: [13, "Enter"] };
 const isOpen = () => evaluate(`document.querySelector("#energy").hasAttribute("data-open")`);
 const activeIs = (sel) => evaluate(`document.activeElement === document.querySelector(${JSON.stringify(sel)})`);
 // Synthetic decode samples (simulate mode only, through window.__sc): before the trial 40 tok/s at 26 W
@@ -60,7 +60,7 @@ const IDLE = `window.__idle = setInterval(() => {
 }, 100)`;
 const press = async (key) => {
   const [vk, code] = KEYS[key];
-  const text = key.length === 1 ? key : undefined;
+  const text = key.length === 1 ? key : key === "Enter" ? "\r" : undefined; // Enter needs \r to submit a form
   await send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: vk, text });
   await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: vk });
 };
@@ -139,9 +139,22 @@ try {
   check(await evaluate(`(() => { const { S, render } = window.__sc, was = S.control.helper_installed;
     S.control.helper_installed = false; render(false);
     const ok = /^Read-only/.test(document.querySelector("#commit-text").textContent)
-      && [...document.querySelectorAll("[data-step], #epp-stops [data-epp], .pf-btn, #apply")].every((b) => b.getAttribute("aria-disabled") === "true")
-      && [...document.querySelectorAll("[data-input], [data-nocap], #epp, #governor, #save-profile")].every((e) => e.disabled);
-    S.control.helper_installed = was; render(false); return ok; })()`), "read-only: the bar says so; controls and Save staged as… are off");
+      && [...document.querySelectorAll("[data-step], #epp-stops [data-epp], .pf-btn, #apply, #save-profile")].every((b) => b.getAttribute("aria-disabled") === "true")
+      && [...document.querySelectorAll("[data-input], [data-nocap], #epp, #governor")].every((e) => e.disabled);
+    // A click must do nothing here. The steppers, EPP stops and Save staged as… carry aria-disabled, not
+    // disabled, so the browser lets the click through: only the handler's own guard can stop it.
+    document.querySelector('#ch-gpu [data-step="1"]').click();
+    document.querySelector('#epp-stops [data-epp="192"]').click();
+    document.querySelector("#save-profile").click();
+    const blocked = Object.keys(S.staged).length === 0 && document.querySelector("#commit").dataset.mode === "idle"
+      && !document.querySelector("#profile-dialog").open;
+    S.control.helper_installed = was; render(false);
+    // The same two clicks must stage, or the check above would pass with the handlers removed.
+    document.querySelector('#ch-gpu [data-step="1"]').click();
+    document.querySelector('#epp-stops [data-epp="192"]').click();
+    const stages = Object.keys(S.staged).length > 0;
+    document.querySelector("#discard").click(); render(false);
+    return ok && blocked && stages; })()`), "read-only: the bar says so, a click stages nothing, and the same click stages once the helper is there");
   await shot("desktop-top-dark.png", false);
   await evaluate(`document.querySelectorAll("details").forEach((d) => d.open = true)`);
   await sleep(1500);
@@ -305,6 +318,53 @@ try {
   check(await activeIs("#commit-text"), "focus moves to the bar text after Keep");
   await sleep(4500);
   check(await mode() === "idle", "bar returns to idle after the outcome");
+
+  // Keep after reboot: the saved-for-boot half of the outcome line, which the K path cannot show.
+  await stageTrial();
+  check(await startTrial(), "second trial starts for the Keep after reboot path");
+  await sleep(700); // past the 600 ms arming, so the button answers
+  await evaluate(`document.querySelector("#keep-boot").click()`);
+  check(await waitFor(`document.querySelector("#commit").dataset.mode === "outcome"`, 3000), "Keep after reboot: outcome mode");
+  check(await evaluate(`/^Kept$/i.test(document.querySelector("#chip-out").textContent) && /and saved for boot/.test(document.querySelector("#commit-text").textContent)`), "bar reports Kept and saved for boot with the values");
+  await sleep(4500);
+  check(await mode() === "idle", "bar returns to idle after the keep-boot outcome");
+
+  // --- profiles: Enter in the dialog saves. The Cancel and Reset buttons must not be
+  // submit buttons, or Enter fires implicit submission through Cancel and the typed
+  // name is thrown away. ---
+  await stageTrial();
+  await evaluate(`document.querySelector("#save-profile").click()`);
+  await sleep(250);
+  check(await evaluate(`document.querySelector("#profile-dialog").open`), "Save staged as… opens the profile dialog");
+  await evaluate(`(() => { const n = document.querySelector("#profile-name"); n.focus(); n.value = "Enter save"; n.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+  check(await activeIs("#profile-name"), "the name field holds focus before Enter");
+  await press("Enter");
+  check(await waitFor(`!document.querySelector("#profile-dialog").open`, 2000), "Enter closes the dialog");
+  await sleep(500);
+  check(await evaluate(`[...document.querySelectorAll("#profiles .pf-btn")].some((b) => b.textContent.includes("Enter save"))`), "Enter saves the profile: the form's default button is Save, not Cancel");
+
+  // --- scale dialog: Enter keeps a bad edit on screen, and Reset to default still applies ---
+  await evaluate(`document.querySelector("#ec-tab").click()`);
+  await sleep(400);
+  const ladderBefore = await evaluate(`document.querySelector("#ladder").textContent`);
+  await evaluate(`document.querySelector("#edit-scale").click()`);
+  await sleep(250);
+  check(await evaluate(`document.querySelector("#scale-dialog").open`), "Edit the class scale opens the dialog");
+  await evaluate(`(() => { const a = document.querySelector("#sc-a"); a.focus(); a.value = "0"; a.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+  await press("Enter");
+  await sleep(150);
+  check(await evaluate(`document.querySelector("#scale-dialog").open && document.querySelector("#sc-a").value === "0"`), "Enter on a bad scale keeps the dialog and the typing");
+  await evaluate(`(() => { const set = (s, v) => { const x = document.querySelector(s); x.value = v; x.dispatchEvent(new Event("input", { bubbles: true })); }; set("#sc-a", "0.77"); set("#sc-r", "1.2"); set("#sc-min", "1"); document.querySelector("#sc-a").focus(); })()`);
+  await press("Enter");
+  check(await waitFor(`!document.querySelector("#scale-dialog").open`, 2000), "Enter with a good scale closes the dialog");
+  check(!ladderBefore.includes("0.77") && await evaluate(`document.querySelector("#ladder").textContent.includes("0.77")`), "the scale applied with Enter reaches the ladder");
+  await evaluate(`document.querySelector("#edit-scale").click()`);
+  await sleep(250);
+  await evaluate(`document.querySelector('#scale-form [value=reset]').click()`);
+  await sleep(250);
+  check(await evaluate(`!document.querySelector("#scale-dialog").open`) && (await evaluate(`document.querySelector("#ladder").textContent`)) === ladderBefore, "Reset to default closes the dialog and puts the default bands back");
+  await press("Escape");
+  await sleep(300);
 
   // --- reduced motion: the drawer fades, it does not slide ---
   await setMotion("reduce");

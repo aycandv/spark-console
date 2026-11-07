@@ -59,20 +59,25 @@ const S = {
   scale: loadScale(store.get("sc-energy-scale")), keys: store.get("sc-keys", "on") !== "off",
 };
 
-/* --- live-region helper: clear, then set next frame, so repeats are spoken again ------------------------- */
+/* --- live-region helper: clear, then set on the next task, so repeats are spoken again -------------------- */
+/* A task, not a frame: requestAnimationFrame does not run in a hidden tab, so the sentence would
+ * wait there and speak stale text when the tab comes back. */
 function announce(text) {
   const el = $("#commit-announce");
   el.textContent = "";
-  requestAnimationFrame(() => { el.textContent = text; });
+  setTimeout(() => { el.textContent = text; }, 0);
 }
 
 /* --- client-side history (mirrors the server's 1 h ring) -------------------------------------------------- */
 const H = { t: [], cols: {} };
 const H_MAX = 3600;
 function seedHistory(cols) {
-  H.t = cols.t || [];
+  // A wrong-shaped body (an {"error": …} answer, a proxy page parsed as JSON) must not install a column
+  // pushHistory cannot push into: that throws on every stream message, forever, with a healthy socket.
+  if (!Array.isArray(cols?.t)) return;
+  H.t = cols.t;
   H.cols = {};
-  for (const [k, v] of Object.entries(cols)) if (k !== "t") H.cols[k] = v;
+  for (const [k, v] of Object.entries(cols)) if (k !== "t" && Array.isArray(v)) H.cols[k] = v;
 }
 function pushHistory(t, row) {
   if (H.t.length && t <= H.t[H.t.length - 1]) return;
@@ -482,9 +487,11 @@ function renderCommit() {
   const phase = !ev ? "" : S.ev?.["gpu.power_w"]?.state === "measuring" ? "wait" : "ok";
   if (S.evPhase === "wait" && phase === "ok") crossfade($("#commit-ev"));
   S.evPhase = phase;
+  // Spec 3.4: this line belongs to "Trial, lost" only. Under stale the stream is open and the countdown
+  // keeps running dimmed, so saying it is stopped would be wrong.
   // Keep stays enabled with no live data: a POST may still get through, and a blocked Keep could lose a change.
   const second = $("#commit-second");
-  const lines = [t && (S.link === "lost" || S.link === "stale") && "No live data, so the countdown here is stopped. The server still reverts this trial on time unless Keep gets through.",
+  const lines = [t && S.link === "lost" && "No live data, so the countdown here is stopped. The server still reverts this trial on time unless Keep gets through.",
     t && nStaged && `<b>${nStaged} staged</b> · apply after this trial ends`].filter(Boolean);
   second.hidden = !lines.length;
   setHTML(second, lines.join("<br>"));
@@ -505,7 +512,7 @@ function renderCommit() {
     lab.dataset.idle ??= lab.textContent;
     setText(lab, S.busyLabel && S.busy === action ? busyText : lab.dataset.idle);
   }
-  $("#reapply-boot").disabled = !!S.busy || !!t || !c.helper_installed;
+  setDis($("#reapply-boot"), !!S.busy || !!t || !c.helper_installed); // aria, not disabled: a focused button must not lose focus mid-confirm
   if (r0) {
     const r1 = $("#commit-text").getBoundingClientRect(), dx = r0.left - r1.left, dy = r0.top - r1.top;
     // Chips that re-wrap (phone) have no single origin: they appear in place.
@@ -726,7 +733,7 @@ function renderProfiles() {
     pf.dataset.staged = isStaged ? "1" : "0";
     setText($("[data-sr]", btn), isStaged ? ", staged" : isCur ? ", current" : "");
   });
-  $("#save-profile").disabled = S.control?.helper_installed === false; // read-only: nothing can be staged
+  setDis($("#save-profile"), S.control?.helper_installed === false); // read-only: nothing can be staged
 }
 
 /* --- render: effect rail ------------------------------------------------------------------------------------------------------------ */
@@ -1071,16 +1078,19 @@ function bind() {
     render(false);
   });
   const dlg = $("#profile-dialog"), name = $("#profile-name");
-  $("#save-profile").addEventListener("click", () => {
+  const saveBtn = $("#save-profile");
+  saveBtn.addEventListener("click", () => {
+    if (isDis(saveBtn)) return; // read-only: the aria-disabled state is the guard, so focus stays put
     const n = Object.keys(S.staged).length;
     $("#profile-hint").textContent = n ? `Saves: ${changeList(S.staged)}` : "Stage values with the controls first.";
     $("#profile-form [value=save]").disabled = !n;
     dlg.showModal();
   });
+  // Cancel is a plain button, so Enter in the name field submits through Save instead of discarding the typing.
+  dlg.querySelector("[data-close]").addEventListener("click", () => dlg.close());
   name.addEventListener("input", () => name.setCustomValidity(name.validity.patternMismatch ? "Use letters, digits, space, . _ - (max 40)" : ""));
   dlg.addEventListener("close", () => { name.value = ""; name.setCustomValidity(""); });
-  $("#profile-form").addEventListener("submit", (e) => {
-    if (e.submitter?.value !== "save") return;
+  $("#profile-form").addEventListener("submit", () => {
     post("api/profiles", { name: name.value.trim(), values: { ...S.staged } }, "profile").catch(() => {});
   });
   $("#window").addEventListener("click", (e) => {
@@ -1100,7 +1110,9 @@ function bind() {
   $("#keys-switch").addEventListener("click", () => setKeys(!S.keys));
   document.addEventListener("keydown", onKey);
   $("#reset-stats").addEventListener("click", () => post("api/stats/reset", {}, "stats").catch(() => {}));
-  $("#reapply-boot").addEventListener("click", () => {
+  const bootBtn = $("#reapply-boot");
+  bootBtn.addEventListener("click", () => {
+    if (isDis(bootBtn)) return; // busy, a trial open, or read-only
     if (confirm("Restart nv-cpu-governor, gb10-clocklock and cpu-epp now? Clocks and EPP go back to their boot values.")) post("api/reapply-boot", {}, "boot").catch(() => {});
   });
   $("#proc-filter").addEventListener("input", () => S.snap && renderProcs(true));
@@ -1139,7 +1151,9 @@ async function start() {
   }
   buildRail();
   try {
-    const [hist, st] = await Promise.all([fetch("api/history?window=3600").then((r) => r.json()), fetch("api/state").then((r) => r.json())]);
+    // Same shape as post(): a non-2xx answer is an error, not data to seed the charts with.
+    const get = (u) => fetch(u).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
+    const [hist, st] = await Promise.all([get("api/history?window=3600"), get("api/state")]);
     seedHistory(hist);
     if (st.snapshot) ingest(st);
   } catch { /* the stream and the header carry the state */ }

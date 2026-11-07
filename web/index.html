@@ -259,7 +259,7 @@
     <label for="profile-name">Name</label>
     <input id="profile-name" name="name" required maxlength="40" pattern="[A-Za-z0-9 ._\-]{1,40}" autocomplete="off" placeholder="Bench…">
     <p class="hint" id="profile-hint">Stage values with the controls first.</p>
-    <div class="dialog-actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save">Save profile</button></div>
+    <div class="dialog-actions"><button class="btn ghost" type="button" data-close>Cancel</button><button class="btn primary" type="submit" value="save">Save profile</button></div>
   </form>
 </dialog>
 
@@ -274,7 +274,7 @@
     </div>
     <table class="grid scale-preview"><caption class="sr-only">Resulting bands</caption><thead><tr><th scope="col">Class</th><th scope="col" class="num">J/token</th></tr></thead><tbody id="scale-preview"></tbody></table>
     <p class="commit-error" id="scale-error" role="alert" hidden>Class A must end above 0, the factor must be above 1 and the decode minimum at 0 or more.</p>
-    <div class="dialog-actions"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn" value="reset" formnovalidate>Reset to default</button><button class="btn primary" value="save">Use this scale</button></div>
+    <div class="dialog-actions"><button class="btn ghost" type="button" data-close>Cancel</button><button class="btn" type="button" value="reset">Reset to default</button><button class="btn primary" type="submit" value="save">Use this scale</button></div>
   </form>
 </dialog>
 

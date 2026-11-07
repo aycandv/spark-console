@@ -278,14 +278,19 @@ export function initEnergy({ fmt, signed, announce, reduced, glide, crossfade, o
     dlg.showModal();
   });
   for (const x of [fa, fr, fm]) { x.addEventListener("input", preview); x.addEventListener("change", showError); }
+  // Cancel and Reset are plain buttons. As submit buttons Cancel was the form's default, so Enter in a
+  // field submitted through it and the typed scale was thrown away without a word.
+  dlg.querySelector("[data-close]").addEventListener("click", () => dlg.close());
+  dlg.querySelector("[value=reset]").addEventListener("click", () => {
+    scale = { ...SCALE_DEFAULT };
+    buildLadder();
+    onScale(scale);
+    dlg.close();
+  });
   $("#scale-form").addEventListener("submit", (e) => {
-    const v = e.submitter?.value;
-    if (v === "reset") scale = { ...SCALE_DEFAULT };
-    else if (v === "save") {
-      const b = showError();
-      if (b.length) { e.preventDefault(); b[0].focus(); return; }
-      scale = { a: Number(fa.value), r: Number(fr.value), min: Number(fm.value) };
-    } else return;
+    const b = showError(); // bad bands keep the dialog open and focus the first field that needs a fix
+    if (b.length) { e.preventDefault(); b[0].focus(); return; }
+    scale = { a: Number(fa.value), r: Number(fr.value), min: Number(fm.value) };
     buildLadder();
     onScale(scale);
   });
