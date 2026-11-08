@@ -33,6 +33,7 @@ class ServerTest(unittest.TestCase):
                          profiles=control.ProfileStore(str(Path(self.tmp.name) / "p.json")),
                          owner="owner@github", hostnames={"127.0.0.1", "localhost", "spark.example.ts.net"},
                          web_dir=str(web))
+        self.app = app
         self.httpd = server.make_server(app, "127.0.0.1", 0)
         self.port = self.httpd.server_address[1]
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
@@ -170,6 +171,17 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.req("POST", "/api/profiles", {"name": "Quiet", "values": {"epp": 0}})[0], 400)
         self.assertEqual(self.req("POST", "/api/profiles/delete", {"name": "Bench"})[0], 200)
         self.assertEqual(self.req("POST", "/api/stats/reset", {})[0], 200)
+
+    def test_control_change_clears_the_shared_stream_payload(self):
+        # The SSE payload for one sampler tick is shared by all streams and keyed on the sampler
+        # seq only, so a control change must drop it. Otherwise a stream that connects in the
+        # sub-second window after Keep is handed the pre-Keep state (issue #11).
+        self.req("POST", "/api/apply", {"changes": {"epp": 64}})
+        with_trial = json.loads(self.app.state_bytes(1))
+        self.assertIsNotNone(with_trial["control"]["trial"])
+        self.req("POST", "/api/keep", {"persist": False})
+        after_keep = json.loads(self.app.state_bytes(1))  # the same seq: the cache must be gone
+        self.assertIsNone(after_keep["control"]["trial"])
 
     def test_sse_stream_sends_snapshot(self):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)

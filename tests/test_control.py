@@ -72,6 +72,15 @@ class ControllerTest(unittest.TestCase):
         self.assertIsNone(self.c.status()["trial"])
         self.assertEqual(self.c.status()["events"][-1]["kind"], "reverted")
 
+    def test_tick_reports_the_revert_it_made(self):
+        # The server drops its shared stream payload on this signal, so a stream that connects
+        # right after an automatic revert must not get the pre-revert state.
+        self.c.apply({"epp": 64})
+        self.assertFalse(self.c.tick())
+        self.clock.t += 60
+        self.assertTrue(self.c.tick())
+        self.assertFalse(self.c.tick())
+
     def test_keep_ends_trial_without_revert(self):
         self.c.apply({"epp": 64})
         self.c.keep(persist=False)

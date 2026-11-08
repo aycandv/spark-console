@@ -196,12 +196,15 @@ class Controller:
             return self.status()
 
     def tick(self):
+        """One second of the control thread. Returns True when it ended a trial by reverting."""
         with self._lock:
             if self._trial and self._clock() >= self._trial["deadline"]:
                 try:
                     self._revert("timeout")
+                    return True
                 except Exception:
-                    pass  # recorded as revert_failed; the UI shows it
+                    return False  # recorded as revert_failed; the UI shows it
+            return False
 
     def keep(self, persist: bool = False):
         with self._lock:

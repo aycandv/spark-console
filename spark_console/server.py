@@ -45,6 +45,11 @@ class App:
     def state(self):
         return {"snapshot": self.sampler.snapshot, "control": self.control_state(), "profiles": self.profiles.all()}
 
+    def invalidate(self):
+        """Drop the shared SSE payload. Control state changed without a new sampler tick, so the
+        cached bytes would show a trial that has already ended (issue #11)."""
+        self._cached = (None, b"")
+
     def state_bytes(self, seq):
         """The SSE payload for one sampler tick, built once and shared by all streams."""
         cached_seq, data = self._cached
@@ -204,6 +209,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, str(e))
         except HelperError as e:
             return self._error(502, f"helper failed: {e}")
+        self.app.invalidate()  # the answer and the next stream must not come from the old payload
         return self._send(200, {"control": self.app.control_state(), "profiles": p.all(), "trial": c.status()["trial"]})
 
 

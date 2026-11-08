@@ -101,7 +101,8 @@ def main(argv=None):
 
     def control_loop():  # own thread: a slow sudo call must not stall sampling
         while True:
-            ctl.tick()
+            if ctl.tick():
+                app.invalidate()  # an automatic revert ends a trial with no request to hang on
             time.sleep(1)
 
     threading.Thread(target=control_loop, daemon=True, name="control").start()
