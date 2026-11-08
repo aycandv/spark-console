@@ -109,6 +109,22 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(c.getresponse().status, 403)
         c.close()
 
+    def test_non_owner_gets_a_page_for_pages_and_json_for_the_api(self):
+        def get(path):
+            c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            c.request("GET", path, headers={"Host": f"127.0.0.1:{self.port}"})
+            r = c.getresponse()
+            out = r.status, r.getheader("Content-Type"), r.read()
+            c.close()
+            return out
+        status, ctype, body = get("/")
+        self.assertEqual((status, ctype), (403, "text/html; charset=utf-8"))
+        self.assertIn(b"only for its owner", body)
+        self.assertNotIn(b"<script", body)
+        self.assertEqual(get("/api/state")[:2], (403, "application/json"))
+        # An unknown host stays a JSON refusal: the page is only for a known host without the owner's login.
+        self.assertEqual(self.req("GET", "/", headers={"Host": "rebind.evil.example"})[0], 403)
+
     def test_negative_content_length_and_nul_path(self):
         c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         c.putrequest("POST", "/api/revert", skip_host=True)

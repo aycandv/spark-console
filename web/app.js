@@ -1,6 +1,6 @@
 /* spark-console client (ES module). One SSE stream drives everything; controls stage values,
    Apply opens a trial on the server, Keep / Revert close it. Nodes are built once and patched per tick. */
-import { trialStart, trialDelta, classNow, classTrial, honesty, loadScale, trialOutcome, SETTLE_S } from "./metrics.js";
+import { trialStart, trialDelta, classNow, classTrial, honesty, loadScale, trialOutcome, SETTLE_S, linkState, notSaved, revertReason, errorText } from "./metrics.js";
 import { initEnergy } from "./energy.js";
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -28,6 +28,11 @@ function glide(el, prop, from, to) {
   el._glide?.cancel();
   el._glide = el.animate([{ [prop]: from }, { [prop]: reduced.matches ? from : to }], { duration: 1000, easing: "linear", fill: "forwards" });
 }
+/* A verdict or a class letter lands once: opacity and a 2 px blur; opacity only with reduced motion. */
+function crossfade(el) {
+  if (reduced.matches) { el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150, easing: "ease" }); return; }
+  el.animate([{ opacity: 0, filter: "blur(2px)" }, { opacity: 1, filter: "blur(0)" }], { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
+}
 const store = {
   get: (k, d = null) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
   set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
@@ -49,25 +54,30 @@ const chgHTML = (k, from, to) => `<span class="chg">${esc(LABEL[k])} <span class
 
 const S = {
   snap: null, control: null, profiles: [], staged: {}, stagedProfile: null, window: 120, sort: "cpu",
-  busy: null, busyLabel: false, error: "", clamp: null,
+  busy: null, busyLabel: false, error: "", errorNet: false, clamp: null, link: null, gotAt: 0,
   trialKey: null, trialStarted: null, armedAt: 0, warned: false, lastRemaining: null, ev: null, lastEvidence: null, outcome: null,
   scale: loadScale(store.get("sc-energy-scale")), keys: store.get("sc-keys", "on") !== "off",
 };
 
-/* --- live-region helper: clear, then set next frame, so repeats are spoken again ------------------------- */
+/* --- live-region helper: clear, then set on the next task, so repeats are spoken again -------------------- */
+/* A task, not a frame: requestAnimationFrame does not run in a hidden tab, so the sentence would
+ * wait there and speak stale text when the tab comes back. */
 function announce(text) {
   const el = $("#commit-announce");
   el.textContent = "";
-  requestAnimationFrame(() => { el.textContent = text; });
+  setTimeout(() => { el.textContent = text; }, 0);
 }
 
 /* --- client-side history (mirrors the server's 1 h ring) -------------------------------------------------- */
 const H = { t: [], cols: {} };
 const H_MAX = 3600;
 function seedHistory(cols) {
-  H.t = cols.t || [];
+  // A wrong-shaped body (an {"error": …} answer, a proxy page parsed as JSON) must not install a column
+  // pushHistory cannot push into: that throws on every stream message, forever, with a healthy socket.
+  if (!Array.isArray(cols?.t)) return;
+  H.t = cols.t;
   H.cols = {};
-  for (const [k, v] of Object.entries(cols)) if (k !== "t") H.cols[k] = v;
+  for (const [k, v] of Object.entries(cols)) if (k !== "t" && Array.isArray(v)) H.cols[k] = v;
 }
 function pushHistory(t, row) {
   if (H.t.length && t <= H.t[H.t.length - 1]) return;
@@ -96,10 +106,13 @@ const resolvedTheme = () => {
 };
 function refreshColors() {
   if (!probe) { probe = document.createElement("span"); probe.hidden = true; document.body.append(probe); }
-  for (const [k, v] of Object.entries({ ink: "--ink", ink2: "--ink-2", ink3: "--ink-3", amber: "--amber-edge", amberText: "--amber-text", well: "--well" })) {
+  for (const [k, v] of Object.entries({ ink: "--ink", ink2: "--ink-2", ink3: "--ink-3", amber: "--amber-edge", amberText: "--amber-text" })) {
     probe.style.color = `var(${v})`;
     C[k] = getComputedStyle(probe).color;
   }
+  // A surface, so read it as one: forced colours map a background to Canvas (a text colour would be CanvasText).
+  probe.style.backgroundColor = "var(--well)";
+  C.well = getComputedStyle(probe).backgroundColor;
 }
 function themeChanged() {
   refreshColors();
@@ -148,10 +161,10 @@ function drawOverlay(u, chart) {
     }
   }
   if (chart.labels && u.data[0].length) {
-    ctx.font = `500 ${11 * px}px "Plex Cond", "Arial Narrow", sans-serif`;
+    ctx.font = `500 ${12 * px}px "Plex Cond", "Arial Narrow", sans-serif`;
     // Text on a small plate of the well colour, so it never sits on a line.
     const label = (text, x, y, align, base, color) => {
-      const w = ctx.measureText(text).width, h = 13 * px, pad = 3 * px;
+      const w = ctx.measureText(text).width, h = 14 * px, pad = 3 * px;
       const x0 = align === "right" ? x - w : x, y0 = base === "top" ? y : y - h;
       ctx.fillStyle = C.well;
       ctx.fillRect(x0 - pad, y0, w + 2 * pad, h);
@@ -163,15 +176,14 @@ function drawOverlay(u, chart) {
     const { min, max } = u.scales.y;
     const step = max - min > 400 ? 50 : max - min > 40 ? 10 : 1;
     const r = (v) => fmt(Math.max(0, Math.round(v / step) * step)); // MHz never goes below 0
-    label(r(max), left + 5 * px, top + 3 * px, "left", "top", C.ink3);
-    label(r(min), left + 5 * px, top + height - 3 * px, "left", "bottom", C.ink3);
     const sp = u.data[2];
     const v = sp ? sp[sp.length - 1] : null;
-    if (v != null) {
-      const y = u.valToPos(v, "y", true);
-      const above = y - top > 18 * px;
-      label(`${chart.capWord} ${fmt(v)}`, left + width - 5 * px, above ? y - 2 * px : y + 2 * px, "right", above ? "bottom" : "top", knobInTrial(chart.knob) ? C.amberText : C.ink3);
-    }
+    const y = v == null ? null : u.valToPos(v, "y", true);
+    const above = y != null && y - top > 18 * px;
+    // The setpoint label at the top already names the top of the scale: skip the max label then.
+    if (y == null || (above ? y - 16 * px : y) - top > 16 * px) label(r(max), left + 5 * px, top + 3 * px, "left", "top", C.ink3);
+    label(r(min), left + 5 * px, top + height - 3 * px, "left", "bottom", C.ink3);
+    if (v != null) label(`${chart.capWord} ${fmt(v)}`, left + width - 5 * px, above ? y - 2 * px : y + 2 * px, "right", above ? "bottom" : "top", knobInTrial(chart.knob) ? C.amberText : C.ink3);
   }
   ctx.restore();
 }
@@ -189,7 +201,8 @@ function makeChart(el, series, { unit = "", digits = 0, pad = 0.15, labels = fal
       x: { time: true },
       y: { range: (u, lo, hi) => {
         if (lo == null || hi == null) return [0, 1];
-        const span = Math.max(hi - lo, Math.abs(hi) * 0.05, 1);
+        // Labelled MHz traces: at least a 15 % span, so ±10 MHz of jitter does not fill the well.
+        const span = Math.max(hi - lo, Math.abs(hi) * (labels ? 0.15 : 0.05), 1);
         return [lo - span * pad, hi + span * pad];
       } },
     },
@@ -231,16 +244,6 @@ function labelTraces() {
 
 /* --- network ------------------------------------------------------------------------------------------------------------ */
 const BUSY = { apply: ["#apply", "Applying…"], keep: ["#keep", "Keeping…"], "keep-boot": ["#keep-boot", "Keeping…"], revert: ["#revert", "Reverting…"] };
-/* The machine state after a failure differs per action, so the copy does too. */
-function errorText(e, action) {
-  if (e.status === 409 && action === "apply") return "A trial is already open: Keep or Revert it first.";
-  if (e.status !== 502) return `Failed: ${e.message}`;
-  const why = e.message.replace(/^helper failed: /, "");
-  if (action === "apply") return `The helper failed: ${why}. The old values are still set.`;
-  if (action === "keep-boot") return `Kept until reboot; saving for boot failed: ${why}.`;
-  if (action === "revert") return `Revert failed: ${why}. The trial values are still set; the server retries.`;
-  return `The helper failed: ${why}.`;
-}
 async function post(path, body = {}, action = path) {
   S.busy = action;
   S.busyLabel = false;
@@ -250,12 +253,14 @@ async function post(path, body = {}, action = path) {
   try {
     const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Spark-Console": "1" }, body: JSON.stringify(body) });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw Object.assign(new Error(data.error || `HTTP ${r.status}`), { status: r.status });
+    // server: the console server answered with its own error (a proxy 502 or a fetch failure has none).
+    if (!r.ok) throw Object.assign(new Error(data.error || `HTTP ${r.status}`), { status: r.status, server: !!data.error });
     if (data.control) S.control = data.control;
     if (data.profiles) S.profiles = data.profiles;
     return data;
   } catch (e) {
     S.error = errorText(e, action);
+    S.errorNet = !e.server;
     S.errorAction = action;
     throw e;
   } finally {
@@ -265,25 +270,51 @@ async function post(path, body = {}, action = path) {
   }
 }
 
+/* One link state drives the header word, the dot and the dimming of every live reading. It is written only
+   on a change, so the polite status region speaks once. Age is time since the last message on this clock,
+   so a phone with a skewed clock is not "stale" for ever. */
+let linkOpen = null, openedAt = 0;
+const LINK_TEXT = { connecting: "Connecting…", live: "Live · 1 s", stale: "Stale data", lost: "Reconnecting…" };
+function setLink() {
+  const now = Date.now();
+  const st = linkState({ open: linkOpen, age: S.gotAt ? (now - S.gotAt) / 1000 : null,
+    held: linkOpen && S.gotAt < openedAt ? (now - openedAt) / 1000 : null, prev: S.link });
+  if (st === S.link) return;
+  S.link = st;
+  document.documentElement.dataset.link = st;
+  $("#link").dataset.state = st;
+  $("#link-text").textContent = LINK_TEXT[st];
+  render(false);
+}
 function connect() {
-  const link = $("#link"), text = $("#link-text");
   const es = new EventSource("api/stream");
-  es.onopen = () => { link.dataset.ok = "1"; text.textContent = "Live · 1 s"; };
-  es.onerror = () => { link.dataset.ok = "0"; text.textContent = "Reconnecting…"; };
+  es.onopen = () => {
+    linkOpen = true;
+    openedAt = Date.now();
+    // A request that got no answer is stale news once the server is back: show the trial outcome instead.
+    if (S.errorNet) { S.error = ""; S.errorNet = false; }
+    setLink();
+  };
+  es.onerror = () => {
+    linkOpen = false;
+    setLink();
+    // After a non-200 answer (a 502 from tailscale serve while the server restarts) the browser gives up.
+    // shortcut: fixed 3 s retry, add backoff if many tabs hammer a down server
+    if (es.readyState === EventSource.CLOSED) { es.close(); setTimeout(connect, 3000); }
+  };
   es.onmessage = (ev) => {
     const st = JSON.parse(ev.data);
     if (st.snapshot?.series) pushHistory(st.snapshot.t, st.snapshot.series);
     ingest(st);
+    setLink();
   };
-  setInterval(() => {
-    if (S.snap && Date.now() / 1000 - S.snap.t > 5 && link.dataset.ok === "1") text.textContent = "Stale data";
-  }, 2000);
 }
 
 function ingest(st) {
   // Simulate mode only: a handle for scripts/ui_smoke.mjs to feed synthetic decode samples.
   if (st.control?.simulate && !window.__sc) window.__sc = { H, S, render };
   S.snap = st.snapshot;
+  S.gotAt = Date.now();
   S.control = st.control;
   S.profiles = st.profiles;
   // Drop staged values that the machine now has anyway.
@@ -311,15 +342,17 @@ function trackTrial() {
     S.trialKey = key;
     S.trialStarted = trialStart(S.snap, t);
     S.armedAt = performance.now() + 600;
-    S.warned = t.remaining_s <= 10;
+    S.warned = t.remaining_s <= 20;
     S.lastRemaining = null;
     S.outcome = null;
     setTimeout(() => renderCommit(), 620);
   } else if (!key && S.trialKey) {
     S.trialKey = null;
     S.trialStarted = null;
+    // A Keep or Revert that got no answer is stale news now: the outcome below is what happened.
+    if (S.errorNet) { S.error = ""; S.errorNet = false; }
     S.outcome = { ...trialOutcome(S.control?.events || []), until: Date.now() + 4000, evidence: S.lastEvidence };
-    announce(outcomeText());
+    announce(outcomeText(true));
     // Ended by the timeout or elsewhere: the Keep/Revert row is about to hide, so do not lose focus with it.
     if ($("#commit-trial").contains(document.activeElement)) queueMicrotask(() => $("#commit-text").focus({ preventScroll: true }));
     setTimeout(() => render(false), 4050);
@@ -336,25 +369,32 @@ function evidenceWords(ev) {
   if (tok?.state === "ok") parts.push(tok.verdict === "within noise" ? "decode within noise" : `decode ${signed(tok.pct, 0)} %`);
   return parts.join(", ");
 }
-function outcomeText() {
+/* The outcome after the chip word ("Kept" / "Reverted"), so the bar does not repeat it. sentence: the
+   full text with the chip word, for the announcement. */
+function outcomeText(sentence = false) {
   const o = S.outcome;
   if (!o) return "";
-  const e = o.ev || {};
-  let head;
-  if (o.kind === "kept") head = o.boot === "saved" ? "Kept and saved for boot" : o.boot === "failed" ? "Kept until reboot · saving for boot failed" : "Kept until reboot";
-  else if (e.kind === "trial_dropped_by_reboot") head = "Trial ended by a reboot";
-  else head = e.why === "timeout" ? "Reverted: not kept in time" : e.why === "user" ? "Reverted" : `Reverted (${e.why || "ended"})`;
+  const e = o.ev, vals = changeList(e?.values || {});
+  let text;
+  if (o.kind === "kept") text = o.boot === "saved" ? `and saved for boot: ${vals}` : o.boot === "failed" ? `until reboot; saving for boot failed: ${vals}` : `until reboot: ${vals}`;
+  else if (e?.kind === "trial_dropped_by_reboot") text = `${revertReason(e)}, the boot values apply`;
+  else text = [revertReason(e), e?.values && `back to ${vals}`].filter(Boolean).join(", ");
   const words = evidenceWords(o.evidence);
-  return words ? `${head} · ${words}` : head;
+  if (!sentence) return words ? `${text} · trial: ${words}` : text;
+  // A reason follows a colon, so "Reverted: the server restarted" is not read as the console reverting the server.
+  const head = o.kind === "kept" ? "Kept" : revertReason(e) ? "Reverted:" : "Reverted";
+  return `${head} ${text}.${words ? ` Trial: ${words}.` : ""}`;
 }
+/* The bar's evidence: the only place that counts the measuring seconds. Verdict dots and words match the rail
+   and the phone pill: "● −13.4 W · ● decode −30 %", "power ≈ same". */
 function evidenceCompact(ev) {
   if (!ev) return "";
   const w = ev["gpu.power_w"], tok = ev["llm.tok_s"];
-  if (w?.state === "measuring") return `<span class="noise">measuring… ${w.wait} s</span>`;
-  const part = (d, unit) => (d.verdict === "within noise" ? `<span class="noise">≈ ${signed(d.d, 1)} ${unit}</span>` : `${signed(d.d, 1)} ${unit}`);
+  if (w?.state === "measuring") return `<span class="noise">measuring…${w.wait ? ` ${w.wait} s` : ""}</span>`;
+  const dot = (d) => (d.verdict === "better" || d.verdict === "worse" ? `<span class="vdot" data-v="${d.verdict}"></span><span class="sr-only">${d.verdict}: </span>` : "");
   const out = [];
-  if (w?.state === "ok") out.push(part(w, "W"));
-  if (tok?.state === "ok") out.push(part(tok, "tok/s"));
+  if (w?.state === "ok") out.push(w.verdict === "within noise" ? '<span class="noise">power ≈ same</span>' : `${dot(w)}${signed(w.d, 1)} W`);
+  if (tok?.state === "ok") out.push(tok.verdict === "within noise" ? '<span class="noise">decode ≈ same</span>' : `${dot(tok)}decode ${signed(tok.pct, 0)} %`);
   else if (tok?.state === "no-decode") out.push('<span class="noise">no decode</span>');
   return out.join(" · ");
 }
@@ -396,7 +436,15 @@ function renderCommit() {
   const bar = $("#commit"), c = S.control || {}, t = c.trial;
   const nStaged = Object.keys(S.staged).length;
   const mode = commitMode();
+  // Apply: the change chips slide from where they were staged (FLIP, the one layout read per mode change).
+  const r0 = bar.dataset.mode === "staged" && mode === "trial" && !reduced.matches ? $("#commit-text").getBoundingClientRect() : null;
   bar.dataset.mode = mode;
+  bar.toggleAttribute("data-urgent", !!t && t.remaining_s <= 10);
+  bar.toggleAttribute("data-arming", !!t && !trialArmed());
+  const ro = c.helper_installed === false;
+  bar.toggleAttribute("data-ro", ro);
+  const title = t ? `${mmss(t.remaining_s)} trial · spark-console` : "spark-console";
+  if (document.title !== title) document.title = title; // a background tab still shows the trial
   if (S.busyLabel) bar.setAttribute("aria-busy", "true"); else bar.removeAttribute("aria-busy");
   setText($("#staged-count"), `${nStaged} staged`);
   const outOn = S.outcome && Date.now() < S.outcome.until;
@@ -411,11 +459,10 @@ function renderCommit() {
       : Object.keys(t.applied).map((k) => chgHTML(k, t.prev[k], t.applied[k])).join("");
     ev = t.revert_error ? "" : evidenceCompact(S.ev);
     setText($("#countdown"), mmss(t.remaining_s));
-    const urgent = t.remaining_s <= 10;
-    // DOM order is the reading order: "Reverting in 0:09" or "1:00 to revert".
-    $("#countdown-pre").hidden = !urgent;
-    $("#countdown-l").hidden = urgent;
-    if (urgent && !S.warned) { S.warned = true; announce("Trial: 10 seconds left. Keep, or the old values return."); }
+    if (t.remaining_s <= 20 && !S.warned) {
+      S.warned = true;
+      announce(`20 seconds left in the trial. Press ${S.keys ? "K or " : ""}Keep to keep these values.`);
+    }
     if (S.lastRemaining !== t.remaining_s) {
       S.lastRemaining = t.remaining_s;
       const f = (r) => `scaleX(${Math.max(0, r) / (t.total_s || 1)})`;
@@ -426,17 +473,28 @@ function renderCommit() {
       + Object.entries(S.staged).map(([k, v]) => chgHTML(k, c.current?.[k], v)).join("");
   } else if (mode === "outcome") {
     html = esc(outcomeText());
-  } else if (mode === "failed" && S.errorAction === "apply") {
+  } else if (mode === "failed" && S.errorAction === "apply" && !S.errorNet) {
     html = "Nothing changed.";
+  } else if (ro) {
+    html = "Read-only: the root helper is not installed, so the controls are off. Run <code>sudo deploy/install.sh</code> in the repo on this machine, then reload.";
   } else {
     const last = (c.events || []).at(-1);
     html = esc(last ? `${eventText(last)} · ${clock(last.t)}` : "No changes staged. Use the channels, the CPU policy or a profile.");
   }
   setHTML($("#commit-text"), html);
   setHTML($("#commit-ev"), ev);
+  // The verdict lands once, when the bar stops counting.
+  const phase = !ev ? "" : S.ev?.["gpu.power_w"]?.state === "measuring" ? "wait" : "ok";
+  if (S.evPhase === "wait" && phase === "ok") crossfade($("#commit-ev"));
+  S.evPhase = phase;
+  // Spec 3.4: this line belongs to "Trial, lost" only. Under stale the stream is open and the countdown
+  // keeps running dimmed, so saying it is stopped would be wrong.
+  // Keep stays enabled with no live data: a POST may still get through, and a blocked Keep could lose a change.
   const second = $("#commit-second");
-  second.hidden = !(t && nStaged);
-  if (t && nStaged) setHTML(second, `<b>${nStaged} staged</b> · apply after this trial ends`);
+  const lines = [t && S.link === "lost" && "No live data, so the countdown here is stopped. The server still reverts this trial on time unless Keep gets through.",
+    t && nStaged && `<b>${nStaged} staged</b> · apply after this trial ends`].filter(Boolean);
+  second.hidden = !lines.length;
+  setHTML(second, lines.join("<br>"));
 
   $("#commit-trial").hidden = !t;
   $("#commit-staged").hidden = !!t || !nStaged;
@@ -454,7 +512,14 @@ function renderCommit() {
     lab.dataset.idle ??= lab.textContent;
     setText(lab, S.busyLabel && S.busy === action ? busyText : lab.dataset.idle);
   }
-  $("#reapply-boot").disabled = !!S.busy || !!t || !c.helper_installed;
+  setDis($("#reapply-boot"), !!S.busy || !!t || !c.helper_installed); // aria, not disabled: a focused button must not lose focus mid-confirm
+  if (r0) {
+    const r1 = $("#commit-text").getBoundingClientRect(), dx = r0.left - r1.left, dy = r0.top - r1.top;
+    // Chips that re-wrap (phone) have no single origin: they appear in place.
+    if ((dx || dy) && Math.round(r0.height) === Math.round(r1.height)) {
+      $("#commit-text").animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
+    }
+  }
   const err = $("#commit-error");
   err.hidden = !S.error;
   setText(err, S.error);
@@ -463,7 +528,7 @@ function renderCommit() {
 function eventText(e) {
   switch (e.kind) {
     case "applied": return `Trial started: ${changeList(e.applied)}`;
-    case "reverted": return `Reverted${e.why === "timeout" ? " (not kept in time)" : e.why === "user" ? "" : ` (${e.why})`}: ${changeList(e.values)}`;
+    case "reverted": { const why = revertReason(e); return `Reverted${why ? ` (${why})` : ""}: ${changeList(e.values)}`; }
     case "kept": return `Kept${e.persist ? " after reboot" : " until reboot"}: ${changeList(e.values)}`;
     case "persisted": return `Saved for boot: ${[e.gpu && "GPU", e.cpu && "CPU"].filter(Boolean).join(" + ")}`;
     case "failed": return `Failed: ${e.error}`;
@@ -477,21 +542,22 @@ function eventText(e) {
 }
 
 /* --- render: channels ----------------------------------------------------------------------------------------------------------- */
+/* [reason, short visible label, level, full name for screen readers] */
 const LAMPS_GPU = [
-  ["sw_power_cap", "Pwr cap", "serious"], ["sw_thermal_slowdown", "SW therm", "serious"],
-  ["hw_thermal_slowdown", "HW therm", "crit"], ["hw_slowdown", "HW slow", "crit"],
-  ["hw_power_brake_slowdown", "Pwr brake", "crit"], ["gpu_idle", "Idle", "info"],
+  ["sw_power_cap", "Pwr cap", "serious", "Power cap"], ["sw_thermal_slowdown", "SW therm", "serious", "Software thermal slowdown"],
+  ["hw_thermal_slowdown", "HW therm", "crit", "Hardware thermal slowdown"], ["hw_slowdown", "HW slow", "crit", "Hardware slowdown"],
+  ["hw_power_brake_slowdown", "Pwr brake", "crit", "Power brake slowdown"], ["gpu_idle", "Idle", "info", "Idle"],
 ];
 function renderLamps(ul, list) {
   if (ul.children.length !== list.length) {
-    ul.innerHTML = list.map(() => '<li class="lamp" data-on=""><span data-l></span><span class="sr-only" data-s></span></li>').join("");
+    ul.innerHTML = list.map(() => '<li class="lamp" data-on=""><span data-l aria-hidden="true"></span><span class="sr-only" data-s></span></li>').join("");
   }
-  list.forEach(([on, label, level], i) => {
+  list.forEach(([on, label, level, full], i) => {
     const li = ul.children[i];
     const v = on ? level : "";
     if (li.dataset.on !== v) li.dataset.on = v;
     setText($("[data-l]", li), label);
-    setText($("[data-s]", li), on ? ", active" : ", off");
+    setText($("[data-s]", li), `${full || label}, ${on ? "active" : "off"}`);
   });
   ul.dataset.none = list.every(([on]) => !on) ? "1" : "0";
 }
@@ -500,7 +566,7 @@ function renderChannel(id, knob, read, sub, range, lamps) {
   const el = $(id), c = S.control || {}, t = c.trial;
   const cur = c.current?.[knob], eff = effective(knob), pending = knob in S.staged;
   const inTrial = !!(t && knob in t.applied);
-  const isGpu = knob === "gpu_cap_mhz";
+  const isGpu = knob === "gpu_cap_mhz", ro = c.helper_installed === false;
   el.dataset.pending = pending ? "1" : "0";
   el.dataset.trial = inTrial && !pending ? "1" : "0";
   $("[data-trialchip]", el).hidden = !inTrial;
@@ -512,24 +578,30 @@ function renderChannel(id, knob, read, sub, range, lamps) {
       ? `<span class="sr-only">in trial </span>${esc(knobText(knob, cur))}<span class="was"><span class="sr-only">, was </span>${esc(knobText(knob, t.prev[knob]))}</span>`
       : esc(knobText(knob, cur)));
   const boot = c.persisted?.[knob];
+  // A running value that boot does not set: quiet ink and words, no amber (amber is staged or trial).
+  const volatile = !pending && !inTrial && notSaved(knob, cur, c.persisted, c.limits);
+  el.dataset.volatile = volatile ? "1" : "0";
   // Without a spark-console drop-in the CPU max is the hardware max at boot.
-  setText($("[data-boot]", el), knob in (c.persisted || {}) ? `Boot ${knobText(knob, boot)}` : isGpu ? "Boot no cap" : "Boot full range");
-  setText($("[data-read]", el), fmt(read));
+  setText($("[data-boot]", el), `${knob in (c.persisted || {}) ? `Boot ${knobText(knob, boot)}` : isGpu ? "Boot no cap" : "Boot full range"}${volatile ? " · not saved for boot" : ""}`);
+  const rv = $("[data-read]", el);
+  setText(rv, fmt(read));
+  rv.dataset.empty = read == null ? "1" : "0";
   setText($("[data-sub]", el), sub);
   const input = $("[data-input]", el);
   const mhz = eff == null ? null : isGpu ? eff : Math.round(eff / 1000);
   if (document.activeElement !== input) input.value = mhz ?? "";
   input.min = range[0];
   input.max = range[1];
-  input.disabled = isGpu && eff == null;
+  input.disabled = (isGpu && eff == null) || ro;
+  // aria-disabled, not disabled: a stepper at its limit keeps focus.
   for (const b of el.querySelectorAll("[data-step]")) {
     const d = Number(b.dataset.step);
-    b.disabled = mhz == null || (d < 0 ? mhz <= range[0] : mhz >= range[1]);
+    setDis(b, ro || mhz == null || (d < 0 ? mhz <= range[0] : mhz >= range[1]));
   }
   setText($("[data-limit]", el), mhz == null ? "" : mhz >= range[1] ? `At max ${fmt(range[1])} MHz` : mhz <= range[0] ? `At min ${fmt(range[0])} MHz` : "");
   setText($("[data-clamp]", el), S.clamp?.id === id ? S.clamp.text : "");
   const nocap = $("[data-nocap]", el);
-  if (nocap) nocap.checked = eff == null;
+  if (nocap) { nocap.checked = eff == null; nocap.disabled = ro; }
   renderLamps($("[data-lamps]", el), lamps);
 }
 
@@ -559,10 +631,10 @@ function bindChannel(id, knob, rangeOf) {
     const d = Number(b.dataset.step) * 100;
     let t1, t2;
     const stop = () => { clearTimeout(t1); clearInterval(t2); };
-    const once = () => { if (b.disabled) stop(); else stepBy(d); };
+    const once = () => (isDis(b) ? stop() : stepBy(d));
     // Press and hold repeats: first repeat at 400 ms, then every 80 ms.
     b.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0 || b.disabled) return;
+      if (e.button !== 0 || isDis(b)) return;
       once();
       t1 = setTimeout(() => { t2 = setInterval(once, 80); }, 400);
     });
@@ -594,7 +666,7 @@ function buildPolicy() {
 function renderPolicy() {
   const c = S.control, snap = S.snap;
   if (!c || !snap) return;
-  const cur = c.current, t = c.trial, effEpp = effective("epp"), effGov = effective("governor");
+  const cur = c.current, t = c.trial, effEpp = effective("epp"), effGov = effective("governor"), ro = c.helper_installed === false;
   const eppStaged = "epp" in S.staged, govStaged = "governor" in S.staged;
   const eppTrial = !!(t && "epp" in t.applied), govTrial = !!(t && "governor" in t.applied);
   const pol = $("#policy");
@@ -605,12 +677,19 @@ function renderPolicy() {
     const isCur = cur.epp === v, isStaged = eppStaged && effEpp === v, isTrial = !eppStaged && eppTrial && cur.epp === v;
     b.setAttribute("aria-pressed", String(isCur));
     b.classList.toggle("is-amber", isStaged || isTrial);
+    setDis(b, ro);
     setText($("[data-sr]", b), isStaged ? ", staged" : isTrial ? ", in trial" : isCur ? ", current" : "");
   }
   const epp = $("#epp");
   if (document.activeElement !== epp) epp.value = effEpp;
   epp.dataset.pending = eppStaged ? "1" : "0";
-  setText($("#epp-boot"), c.persisted?.epp != null ? `Boot ${c.persisted.epp}` : "");
+  epp.disabled = ro;
+  const bootTag = (el, text, knob, staged, inTrial) => {
+    const v = !staged && !inTrial && notSaved(knob, cur[knob], c.persisted, c.limits);
+    el.dataset.volatile = v ? "1" : "0";
+    setText(el, text && `${text}${v ? " · not saved for boot" : ""}`);
+  };
+  bootTag($("#epp-boot"), c.persisted?.epp != null ? `Boot ${c.persisted.epp}` : "", "epp", eppStaged, eppTrial);
   setText($("#epp-now"), eppStaged ? `now ${cur.epp}` : eppTrial ? `was ${t.prev.epp}` : "");
   const gov = $("#governor");
   const opts = snap.cpu.governors.join(",");
@@ -620,7 +699,8 @@ function renderPolicy() {
   }
   if (document.activeElement !== gov) gov.value = effGov;
   gov.dataset.pending = govStaged ? "1" : "0";
-  setText($("#gov-boot"), `Boot ${c.persisted?.governor || "nv-cpu-governor"}`);
+  gov.disabled = ro;
+  bootTag($("#gov-boot"), `Boot ${c.persisted?.governor || "nv-cpu-governor"}`, "governor", govStaged, govTrial);
   setText($("#gov-now"), govStaged ? `now ${cur.governor}` : govTrial ? `was ${t.prev.governor}` : "");
 }
 
@@ -648,10 +728,12 @@ function renderProfiles() {
     const isCur = vals.every(([k, v]) => cur[k] === v);
     const isStaged = anyStaged && vals.every(([k, v]) => effective(k) === v) && vals.some(([k]) => k in S.staged);
     const btn = $(".pf-btn", pf);
+    setDis(btn, S.control?.helper_installed === false);
     if (isCur) btn.setAttribute("aria-current", "true"); else btn.removeAttribute("aria-current");
     pf.dataset.staged = isStaged ? "1" : "0";
     setText($("[data-sr]", btn), isStaged ? ", staged" : isCur ? ", current" : "");
   });
+  setDis($("#save-profile"), S.control?.helper_installed === false); // read-only: nothing can be staged
 }
 
 /* --- render: effect rail ------------------------------------------------------------------------------------------------------------ */
@@ -659,19 +741,20 @@ const RAIL = [
   { key: "gpu.power_w", label: "GPU power", unit: "W", word: "watts", d: 1, val: (s) => s.gpu?.power_w, meta: () => `measured · ${statMeta("gpu.power_w", 1, "W")}` },
   { key: "llm.tok_s", label: "Decode", unit: "tok/s", word: "tokens per second", d: 1, val: (s) => s.llm?.tok_s, meta: (s) => (s.llm?.endpoints || []).filter((e) => e.ok).map((e) => e.model || e.engine).join(", ") || "no LLM server answering" },
   { key: "llm.j_per_tok", label: "Energy", unit: "J/tok", word: "joules per token", d: 2, val: (s) => s.llm?.j_per_tok, meta: () => "GPU W ÷ tok/s (GPU only)" },
-  { key: "gpu.tlimit_c", label: "GPU headroom", unit: "°C", word: "degrees", d: 0, val: (s) => s.gpu?.tlimit_c, meta: (s) => `GPU ${fmt(s.gpu?.temp_c)} °C · min ${fmt(S.snap?.stats?.["gpu.tlimit_c"]?.min)} °C` },
-  { key: "gpu.util", label: "GPU busy", unit: "%", word: "percent", d: 0, val: (s) => s.gpu?.util, meta: (s) => `${s.gpu?.pstate ?? ""} · SM ${fmt(s.gpu?.sm_mhz)} MHz` },
-  { key: "mem.avail_gib", label: "Memory free", unit: "GiB", word: "GiB", d: 1, val: (s) => s.mem?.avail_kib / 1048576, meta: (s) => `PSI ${fmt(s.mem?.psi?.some?.avg10, 1)} % · swap ${fmt(s.mem?.swap_used_kib / 1048576, 1)} GiB` },
+  { key: "gpu.tlimit_c", label: "GPU headroom", unit: "°C", word: "degrees", d: 0, val: (s) => s.gpu?.tlimit_c, meta: (s) => `GPU\u00a0${fmt(s.gpu?.temp_c)}\u00a0°C · min\u00a0${fmt(S.snap?.stats?.["gpu.tlimit_c"]?.min)}\u00a0°C` },
+  { key: "gpu.util", label: "GPU busy", unit: "%", word: "percent", d: 0, val: (s) => s.gpu?.util, meta: (s) => `${s.gpu?.pstate ?? ""} · SM\u00a0${fmt(s.gpu?.sm_mhz)}\u00a0MHz` },
+  { key: "mem.avail_gib", label: "Memory free", unit: "GiB", word: "GiB", d: 1, val: (s) => s.mem?.avail_kib / 1048576, meta: (s) => `PSI\u00a0${fmt(s.mem?.psi?.some?.avg10, 1)}\u00a0% · swap\u00a0${fmt(s.mem?.swap_used_kib / 1048576, 1)}\u00a0GiB` },
 ];
 function statMeta(key, d, unit) {
   const st = S.snap?.stats?.[key];
-  return st ? `avg ${fmt(st.avg, d)} · max ${fmt(st.max, d)} ${unit}` : "";
+  // U+00A0 joins label, number and unit, so a narrow readout breaks the line only at " · "
+  return st ? `avg\u00a0${fmt(st.avg, d)} · max\u00a0${fmt(st.max, d)}\u00a0${unit}` : "";
 }
 function buildRail() {
   const rail = $("#rail");
   rail.innerHTML = RAIL.map((r, i) => `<div class="readout" data-i="${i}">
       <span class="silk">${esc(r.label)}</span>
-      <span class="r-val"><span data-v>—</span><small>${esc(r.unit)}</small></span>
+      <span class="r-val"><span data-v data-empty="1">—</span><small>${esc(r.unit)}</small></span>
       <span class="r-meta" data-m></span>
       <span class="r-delta" data-d hidden></span>
       <div class="spark" data-spark role="img" aria-label="${esc(r.label)} over the selected window"></div>
@@ -680,7 +763,7 @@ function buildRail() {
 }
 function deltaLine(r, d) {
   if (!d) return null;
-  if (d.state === "measuring") return { v: "wait", html: `measuring… ${d.wait} s` };
+  if (d.state === "measuring") return { v: "wait", html: "measuring" }; // the bar holds the one count
   if (d.state === "no-decode") return { v: "wait", html: "no decode traffic" };
   if (d.state === "below-min") return { v: "wait", html: `no class: decode below ${fmt(d.min)} tok/s` };
   const pct = r.key === "llm.tok_s" && d.verdict !== "within noise" && d.pct != null ? ` (${signed(d.pct, 0)} %)` : "";
@@ -688,19 +771,24 @@ function deltaLine(r, d) {
   const sr = `${r.label} ${fmt(Math.abs(d.d), r.d)} ${r.word} ${d.d < 0 ? "lower" : "higher"} than before the trial, ${d.verdict}.`;
   return {
     v: d.verdict === "within noise" ? "noise" : d.verdict,
-    html: `<span aria-hidden="true">${signed(d.d, r.d)} ${esc(r.unit)}${pct} ·</span>${dot}<span aria-hidden="true">${d.verdict}</span><span class="sr-only">${esc(sr)}</span>`,
+    html: `<span aria-hidden="true">${signed(d.d, r.d)} ${esc(r.unit)}${pct} ·</span><span>${dot}<span aria-hidden="true">${d.verdict}</span></span><span class="sr-only">${esc(sr)}</span>`,
   };
 }
 function renderRail() {
   const s = S.snap;
   RAIL.forEach((r, i) => {
-    const el = $(`.readout[data-i="${i}"]`);
-    setText($("[data-v]", el), fmt(r.val(s), r.d));
+    const el = $(`.readout[data-i="${i}"]`), v = r.val(s), vEl = $("[data-v]", el);
+    setText(vEl, fmt(v, r.d));
+    vEl.dataset.empty = v == null || Number.isNaN(v) ? "1" : "0";
     const line = S.ev ? deltaLine(r, S.ev[r.key]) : null;
     const m = $("[data-m]", el), dl = $("[data-d]", el);
     m.hidden = !!line;
     dl.hidden = !line;
-    if (line) { dl.dataset.v = line.v; setHTML(dl, line.html); } else setText(m, r.meta(s));
+    if (line) {
+      if (dl.dataset.v === "wait" && line.v !== "wait") queueMicrotask(() => crossfade(dl));
+      dl.dataset.v = line.v;
+      setHTML(dl, line.html);
+    } else setText(m, r.meta(s));
   });
 }
 
@@ -727,13 +815,14 @@ function patchRows(tbody, rows, cls = []) {
 }
 function setSum(id, text, alarm) {
   setHTML($(`${id} [data-sum]`), `${alarm ? `<span class="chip chip-alarm">${esc(alarm)}</span>` : ""}<span>${esc(text)}</span>`);
+  setText($(`${id} [data-alarm]`), alarm ? `, ${alarm}` : "");
 }
 function renderCores(s) {
   const box = $("#cores");
   const key = s.cpu.cores.map((c) => `${c.cluster}:${c.cpu}`).join(",");
   if (box.dataset.key !== key) {
     box.dataset.key = key;
-    box.innerHTML = ["x925", "a725"].map((k) => `<div class="cluster-row"><span class="silk">${k} · <span data-n="${k}"></span></span><div class="cells">${
+    box.innerHTML = ["x925", "a725"].map((k) => `<div class="cluster-row"><span class="meta">${k.toUpperCase()} · <span data-n="${k}"></span> cores</span><div class="cells">${
       s.cpu.cores.filter((c) => c.cluster === k).map((c) => `<div class="cell" data-cpu="${c.cpu}"><div class="fill"></div><span>cpu${c.cpu}</span><b></b></div>`).join("")}</div></div>`).join("");
   }
   for (const k of ["x925", "a725"]) { const n = $(`[data-n="${k}"]`, box); if (n) setText(n, String(s.cpu.clusters[k]?.cores ?? 0)); }
@@ -804,7 +893,8 @@ function renderActivity(ev) {
   });
 }
 let procStatusT;
-function renderProcs() {
+/* announce: the filter or the tree changed (a user action); the 1 Hz render never speaks */
+function renderProcs(announce = false) {
   const q = $("#proc-filter").value.trim().toLowerCase();
   let rows = S.snap.procs.filter((p) => !q || p.comm.toLowerCase().includes(q) || String(p.pid).startsWith(q));
   const key = S.sort;
@@ -828,6 +918,7 @@ function renderProcs() {
   else patchRows(body, rows.slice(0, 200).map((p) => [p.pid,
     { t: `${depth.get(p.pid) ? "└ " : ""}${p.comm}`, cls: "name", pad: 8 + 14 * (depth.get(p.pid) || 0), title: p.comm, translate: false },
     fmt(p.cpu, 1), fmt(p.rss_mib), p.gpu_mib == null ? "" : fmt(p.gpu_mib), p.state]), ["num", "", "num", "num", "num", ""]);
+  if (!announce) return;
   clearTimeout(procStatusT);
   procStatusT = setTimeout(() => setText($("#proc-status"), q ? `${rows.length} of ${S.snap.procs.length} processes match` : ""), 300);
 }
@@ -842,7 +933,6 @@ function energyView() {
     v.trial = { remaining: t.remaining_s, total: t.total_s, key: S.trialKey };
     v.before = ct.before;
     v.now = ct.now;
-    v.wait = ct.wait;
     v.deltas = S.ev ? { j: S.ev["llm.j_per_tok"], tok: S.ev["llm.tok_s"], w: S.ev["gpu.power_w"] } : null;
     if (t.revert_error) v.state = "hold";
     else if (ct.state === "ok") v.state = ct.before ? "trial" : "ok";
@@ -872,13 +962,14 @@ function render(tick = true) {
   const reasons = new Set(g.reasons || []);
   renderChannel("#ch-gpu", "gpu_cap_mhz", g.sm_mhz,
     s.gpu ? `${fmt(g.util)} % busy · ${fmt(g.power_w, 1)} W · headroom ${fmt(g.tlimit_c)} °C` : s.gpu_error || "no GPU data",
-    [300, 3100], LAMPS_GPU.map(([k, l, lvl]) => [reasons.has(k), l, lvl]));
+    [300, 3100], LAMPS_GPU.map(([k, l, lvl, full]) => [reasons.has(k), l, lvl, full]));
   for (const k of ["x925", "a725"]) {
     const cl = s.cpu.clusters[k] || {};
     const r = lim[k] || [0, 0];
     renderChannel(`#ch-${k}`, `${k}_max_khz`, cl.mhz, `${fmt(cl.util)} % busy · ${cl.cores ?? 0} cores`,
       [Math.ceil(r[0] / 1000), Math.floor(r[1] / 1000)],
-      [[cl.perf_limited > 0, cl.perf_limited > 0 ? `Perf limited · ${cl.perf_limited}` : "Perf limited", "serious"]]);
+      [[cl.perf_limited > 0, cl.perf_limited > 0 ? `Perf limited · ${cl.perf_limited}` : "Perf limited", "serious",
+        cl.perf_limited > 0 ? `Performance limited on ${cl.perf_limited} core${cl.perf_limited === 1 ? "" : "s"}` : "Performance limited"]]);
   }
   renderPolicy();
   renderProfiles();
@@ -951,7 +1042,7 @@ function bind() {
   }
   $("#epp-stops").addEventListener("click", (e) => {
     const b = e.target.closest("[data-epp]");
-    if (b) stage("epp", Number(b.dataset.epp));
+    if (b && !isDis(b)) stage("epp", Number(b.dataset.epp));
   });
   $("#epp").addEventListener("change", (e) => {
     const v = Math.round(Number(e.target.value));
@@ -976,7 +1067,7 @@ function bind() {
       return;
     }
     const b = e.target.closest("[data-profile]");
-    if (!b) return;
+    if (!b || isDis(b)) return;
     // A profile replaces what is staged (no merge with leftovers).
     const p = S.profiles[Number(b.dataset.profile)], cur = S.control?.current || {};
     S.staged = {};
@@ -987,16 +1078,19 @@ function bind() {
     render(false);
   });
   const dlg = $("#profile-dialog"), name = $("#profile-name");
-  $("#save-profile").addEventListener("click", () => {
+  const saveBtn = $("#save-profile");
+  saveBtn.addEventListener("click", () => {
+    if (isDis(saveBtn)) return; // read-only: the aria-disabled state is the guard, so focus stays put
     const n = Object.keys(S.staged).length;
     $("#profile-hint").textContent = n ? `Saves: ${changeList(S.staged)}` : "Stage values with the controls first.";
     $("#profile-form [value=save]").disabled = !n;
     dlg.showModal();
   });
+  // Cancel is a plain button, so Enter in the name field submits through Save instead of discarding the typing.
+  dlg.querySelector("[data-close]").addEventListener("click", () => dlg.close());
   name.addEventListener("input", () => name.setCustomValidity(name.validity.patternMismatch ? "Use letters, digits, space, . _ - (max 40)" : ""));
   dlg.addEventListener("close", () => { name.value = ""; name.setCustomValidity(""); });
-  $("#profile-form").addEventListener("submit", (e) => {
-    if (e.submitter?.value !== "save") return;
+  $("#profile-form").addEventListener("submit", () => {
     post("api/profiles", { name: name.value.trim(), values: { ...S.staged } }, "profile").catch(() => {});
   });
   $("#window").addEventListener("click", (e) => {
@@ -1012,14 +1106,17 @@ function bind() {
     if (b) setTheme(b.dataset.themeSet);
   });
   darkMQ.addEventListener("change", themeChanged);
+  matchMedia("(forced-colors: active)").addEventListener("change", themeChanged);
   $("#keys-switch").addEventListener("click", () => setKeys(!S.keys));
   document.addEventListener("keydown", onKey);
   $("#reset-stats").addEventListener("click", () => post("api/stats/reset", {}, "stats").catch(() => {}));
-  $("#reapply-boot").addEventListener("click", () => {
+  const bootBtn = $("#reapply-boot");
+  bootBtn.addEventListener("click", () => {
+    if (isDis(bootBtn)) return; // busy, a trial open, or read-only
     if (confirm("Restart nv-cpu-governor, gb10-clocklock and cpu-epp now? Clocks and EPP go back to their boot values.")) post("api/reapply-boot", {}, "boot").catch(() => {});
   });
-  $("#proc-filter").addEventListener("input", () => S.snap && renderProcs());
-  $("#proc-tree").addEventListener("change", () => S.snap && renderProcs());
+  $("#proc-filter").addEventListener("input", () => S.snap && renderProcs(true));
+  $("#proc-tree").addEventListener("change", () => S.snap && renderProcs(true));
   $$(".sort").forEach((b) => b.addEventListener("click", () => {
     S.sort = b.dataset.sort;
     $$("#d-procs th").forEach((th) => th.removeAttribute("aria-sort"));
@@ -1039,7 +1136,7 @@ async function start() {
   renderLinks();
   buildPolicy();
   energy = initEnergy({
-    fmt, signed, announce, reduced, glide,
+    fmt, signed, announce, reduced, glide, crossfade,
     onScale: (scale) => { S.scale = scale; store.set("sc-energy-scale", JSON.stringify(scale)); render(false); },
   });
   energy.init(S.scale);
@@ -1054,12 +1151,14 @@ async function start() {
   }
   buildRail();
   try {
-    const [hist, st] = await Promise.all([fetch("api/history?window=3600").then((r) => r.json()), fetch("api/state").then((r) => r.json())]);
+    // Same shape as post(): a non-2xx answer is an error, not data to seed the charts with.
+    const get = (u) => fetch(u).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
+    const [hist, st] = await Promise.all([get("api/history?window=3600"), get("api/state")]);
     seedHistory(hist);
     if (st.snapshot) ingest(st);
-  } catch (e) {
-    $("#link-text").textContent = `Cannot reach server: ${e.message}`;
-  }
+  } catch { /* the stream and the header carry the state */ }
+  setLink();
+  setInterval(setLink, 1000);
   // An EventSource opened before `load` keeps the page "loading" (spinner, headless screenshots).
   if (document.readyState === "complete") connect();
   else addEventListener("load", connect, { once: true });

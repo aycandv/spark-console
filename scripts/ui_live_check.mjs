@@ -3,12 +3,13 @@
 // Loads the page, checks the live stream, read-back values, both themes, the Energy Class drawer
 // (open, Escape, focus return), no console errors and no overflow at 390 px; writes screenshots.
 import { spawn } from "node:child_process";
-import { writeFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const [url = "http://127.0.0.1:5566/", out = ".", login = "dev@local"] = process.argv.slice(2);
 const port = Number(process.argv[5] || 9390);
+mkdirSync(out, { recursive: true }); // the screenshots have somewhere to land on a fresh clone
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const chrome = spawn("google-chrome", ["--headless=new", "--disable-gpu", "--hide-scrollbars", `--remote-debugging-port=${port}`,
   `--user-data-dir=${mkdtempSync(join(tmpdir(), "ui-live-"))}`, "about:blank"], { stdio: "ignore" });
@@ -59,7 +60,7 @@ try {
     await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     await send("Page.navigate", { url });
     await sleep(4500);
-    check(await evaluate(`document.querySelector("#link")?.dataset.ok === "1"`), `${scheme}: live stream connected`);
+    check(await evaluate(`document.querySelector("#link")?.dataset.state === "live"`), `${scheme}: live stream connected`);
     check(await evaluate(`/\\d/.test(document.querySelector("#ch-gpu [data-read]")?.textContent || "")`), `${scheme}: GPU read-back shows a number`);
     const bg = await evaluate(`getComputedStyle(document.body).backgroundColor`);
     const lum = bg.match(/\d+/g).slice(0, 3).reduce((a, b) => a + Number(b), 0) / 3;

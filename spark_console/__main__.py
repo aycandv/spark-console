@@ -26,10 +26,12 @@ def tailnet_identity():
 
 
 class Simulated:
-    """--simulate: controls change an in-memory overlay instead of the hardware (for UI work without root)."""
+    """--simulate: controls change an in-memory overlay instead of the hardware (for UI work without root).
+    Keep after reboot changes a boot overlay, so the UI sees the values as saved for boot."""
 
-    def __init__(self, real_current):
+    def __init__(self, real_current, real_persisted):
         self.real, self.overlay = real_current, {}
+        self.real_persisted, self.boot = real_persisted, {}
 
     def run(self, args):
         a = args
@@ -43,10 +45,17 @@ class Simulated:
             self.overlay["governor"] = a[1]
         elif a[0] == "cpu-max":
             self.overlay[f"{a[1]}_max_khz"] = int(a[2])
+        elif a[0] == "persist-gpu":
+            self.boot["gpu_cap_mhz"] = None if a[1] == "none" else int(a[1])
+        elif a[0] == "persist-cpu":
+            self.boot.update(epp=int(a[1]), x925_max_khz=int(a[2]), a725_max_khz=int(a[3]), governor=a[4])
         print("simulate: helper", *args, flush=True)
 
     def current(self):
         return {**self.real(), **self.overlay}
+
+    def persisted(self):
+        return {**self.real_persisted(), **self.boot}
 
 
 def main(argv=None):
@@ -72,8 +81,8 @@ def main(argv=None):
 
     real_current, limits, persisted = control.make_readers()
     if args.simulate:
-        sim = Simulated(real_current)
-        run, current = sim.run, sim.current
+        sim = Simulated(real_current, persisted)
+        run, current, persisted = sim.run, sim.current, sim.persisted
     else:
         run, current = control.sudo_helper, real_current
     ctl = control.Controller(run=run, read_current=current, read_limits=limits, read_persisted=persisted,
